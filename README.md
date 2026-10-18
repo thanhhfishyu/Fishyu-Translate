@@ -1,6 +1,7 @@
 # Fishyu Translate
 
 App Android dịch chữ tiếng Trung và tiếng Nhật trên màn hình sang tiếng Việt, dùng DeepL.
+<Tui làm app này theo order của anh rể tui, mọi người có thể tham khảo và sử dụng>
 
 ## Tính năng
 
@@ -17,9 +18,9 @@ App Android dịch chữ tiếng Trung và tiếng Nhật trên màn hình sang 
 ## Cài đặt
 
 1. Tải file apk mới nhất ở mục Releases và cài lên điện thoại.
-2. Mở app, dán DeepL API key (lấy miễn phí tại https://www.deepl.com/pro-api, gói API Free 500.000 ký tự/tháng).
+2. Mở app, dán DeepL API key (lấy miễn phí tại https://www.deepl.com/pro-api, gói API Free cho dev 500.000 ký tự/tháng).
 3. Bấm "Bật bong bóng" và cấp quyền hiển thị trên ứng dụng khác, thông báo, ghi màn hình. Từ Android 14 trở lên chọn "Toàn bộ màn hình".
-
+anyway, nếu không biết lấy API DeepL kiểu gì thì tự tìm trên internet nhớ :V
 ## Build
 
 ```
