@@ -1,17 +1,26 @@
 package com.fishyu.translate
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
+import android.text.method.PasswordTransformationMethod
 import android.view.Gravity
 import android.view.View
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -21,9 +30,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -32,9 +38,9 @@ class MainActivity : AppCompatActivity() {
     private val scope = MainScope()
     private lateinit var p: Palette
     private lateinit var col: LinearLayout
-    private lateinit var toggleBtn: MaterialButton
+    private lateinit var toggleBtn: TextView
     private lateinit var permText: TextView
-    private lateinit var keyField: TextInputEditText
+    private lateinit var keyField: EditText
     private lateinit var usageText: TextView
     private lateinit var domainField: EditText
     private lateinit var glossaryField: EditText
@@ -43,6 +49,7 @@ class MainActivity : AppCompatActivity() {
         "Y học" to "Medical / clinical text. Use precise standard medical terminology.",
         "Sinh học" to "Biology / life-science text. Use precise scientific terminology.",
         "Tiểu thuyết" to "Chinese web novel / fiction. Natural literary style, keep character names consistent.",
+        "Game" to "Video game story dialogue. Natural, casual spoken style; keep character names consistent.",
         "Kỹ thuật" to "Technical documentation. Use precise technical terminology.",
     )
 
@@ -51,10 +58,10 @@ class MainActivity : AppCompatActivity() {
         p = Palette(this)
         Dictionary.preload(this)
 
-        val scroll = ScrollView(this).apply { setBackgroundColor(p.bg) }
+        val scroll = ScrollView(this).apply { setBackgroundColor(p.page) }
         col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(40))
+            setPadding(dp(16), dp(12), dp(16), dp(40))
         }
         scroll.addView(col)
         ViewCompat.setOnApplyWindowInsetsListener(scroll) { v, insets ->
@@ -83,139 +90,192 @@ class MainActivity : AppCompatActivity() {
         Prefs.glossaryText = glossaryField.text.toString()
     }
 
-    private fun title(t: String) = col.addView(label(t, 18f, p.fg, bold = true).apply {
-        setPadding(0, dp(24), 0, dp(6))
-    })
-
-    private fun body(t: String, color: Int = p.muted, size: Float = 14f) = label(t, size, color).apply {
-        setLineSpacing(0f, 1.2f)
-    }.also { col.addView(it) }
-
-    private fun button(t: String, filled: Boolean = true, onClick: () -> Unit) =
-        MaterialButton(this, null,
-            if (filled) com.google.android.material.R.attr.materialButtonStyle
-            else com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            text = t
-            setOnClickListener { onClick() }
+    private fun card(title: String, tag: String? = null): LinearLayout {
+        val c = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = doodle(p, p.bg, dpf(20f), dp(4))
+            setPadding(dp(16), dp(12), dp(20), dp(18))
         }
+        val head = label(title, 19f, p.fg, bold = true)
+        if (tag != null) {
+            val t = label(tag, 11f, p.fg).apply {
+                typeface = Fonts.medium(this@MainActivity)
+                background = rounded(p.accentSoft, dpf(10f), dp(2), p.ink)
+                setPadding(dp(8), dp(1), dp(8), dp(2))
+            }
+            c.addView(hbox(head, spacer(), t))
+        } else c.addView(head)
+        col.addView(c, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        return c
+    }
+
+    private fun LinearLayout.text(t: String, color: Int = p.muted, size: Float = 14f) =
+        label(t, size, color).apply { setLineSpacing(0f, 1.2f); setPadding(0, dp(2), 0, dp(4)) }.also { addView(it) }
+
+    private fun field(hintText: String, value: String, multi: Boolean = false) = EditText(this).apply {
+        setText(value)
+        hint = hintText
+        textSize = 15f
+        setTextColor(p.fg)
+        setHintTextColor(p.muted)
+        background = rounded(p.surface, dpf(14f), dp(2), p.accentSoft)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        if (multi) {
+            minLines = 4
+            gravity = Gravity.TOP
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+    }
+
+    private fun LinearLayout.addFull(v: View, top: Int = 8) =
+        addView(v, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) })
+
+    private fun tint(): ColorStateList = ColorStateList.valueOf(p.accent)
+
+    private fun <T> LinearLayout.radios(items: List<T>, labelOf: (T) -> String, selected: T, horizontal: Boolean = false,
+                                        onPick: (T) -> Unit) {
+        val g = RadioGroup(this@MainActivity).apply { orientation = if (horizontal) RadioGroup.HORIZONTAL else RadioGroup.VERTICAL }
+        items.forEach { item ->
+            g.addView(RadioButton(this@MainActivity).apply {
+                text = labelOf(item); id = View.generateViewId(); isChecked = item == selected
+                setTextColor(p.fg); buttonTintList = tint()
+                if (horizontal) setPadding(0, 0, dp(10), 0)
+                setOnCheckedChangeListener { _, c -> if (c) onPick(item) }
+            })
+        }
+        addView(g)
+    }
+
+    private fun LinearLayout.check(t: String, value: Boolean, onChange: (Boolean) -> Unit) =
+        addView(CheckBox(this@MainActivity).apply {
+            text = t; isChecked = value; setTextColor(p.fg); buttonTintList = tint()
+            setOnCheckedChangeListener { _, c -> onChange(c) }
+        })
 
     private fun build() {
-        col.addView(label("Fishyu Translate", 26f, p.fg, bold = true))
-        body("Dịch tiếng Trung / tiếng Nhật trên màn hình sang tiếng Việt, theo ngữ cảnh bằng DeepL.")
+        buildHero()
 
-        title("Bong bóng dịch")
-        permText = body("")
-        toggleBtn = button("Bật bong bóng") {
+        val bubbleCard = card("Bong bóng dịch")
+        permText = bubbleCard.text("")
+        toggleBtn = bigButton("Bật bong bóng", p) {
             if (BubbleService.running) { BubbleService.stop(this); toggleBtn.postDelayed({ refreshStatus() }, 300) }
             else startBubble()
         }
-        col.addView(toggleBtn, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(8) })
+        bubbleCard.addFull(toggleBtn, 10)
 
-        title("DeepL API key")
-        body("Key miễn phí có 500.000 ký tự/tháng (key dạng ...:fx). Mỗi chữ Hán tính là 1 ký tự.")
-        val til = TextInputLayout(this).apply {
-            hint = "Dán DeepL API key vào đây"
-            endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
-        }
-        keyField = TextInputEditText(til.context).apply {
+        val liveCard = card("Dịch trực tiếp", "game")
+        liveCard.text("Giữ bong bóng, chọn \"Dịch trực tiếp (game)\" rồi khoanh khung thoại. App tự dịch lại mỗi khi chữ trong khung đổi, bạn vẫn chạm vào game bình thường.")
+        liveCard.text("Bộ dịch cho chế độ này", p.fg, 14f)
+        liveCard.radios(Engine.entries, { if (it == Engine.DEEPL) "DeepL (chuẩn hơn, tốn ký tự)" else "Offline (miễn phí, tiết kiệm)" },
+            Prefs.liveEngine) { Prefs.liveEngine = it }
+        liveCard.check("Hiện cả chữ gốc trong khung dịch", Prefs.liveShowSource) { Prefs.liveShowSource = it }
+
+        val keyCard = card("DeepL API key")
+        keyCard.text("Gói Developer miễn phí của DeepL cho 1 triệu ký tự dùng một lần (không làm mới hằng tháng). Mỗi chữ Hán tính 1 ký tự. Phần gợi ý lĩnh vực và ngữ cảnh không bị tính.")
+        keyField = field("Dán DeepL API key vào đây", Prefs.deeplKey).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(Prefs.deeplKey)
+            transformationMethod = PasswordTransformationMethod.getInstance()
+            isSingleLine = true
+            typeface = android.graphics.Typeface.DEFAULT
         }
-        til.addView(keyField)
-        col.addView(til, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-        usageText = body("")
-        val check = button("Kiểm tra key", filled = false) {
+        keyCard.addFull(keyField)
+        usageText = keyCard.text("")
+        val show = chip("Hiện", p) {
+            val hidden = keyField.transformationMethod != null
+            keyField.transformationMethod = if (hidden) null else PasswordTransformationMethod.getInstance()
+            (it as TextView).text = if (hidden) "Ẩn" else "Hiện"
+        }
+        val checkKey = chip("Kiểm tra key", p, filled = true) {
             save()
             usageText.text = "Đang kiểm tra..."
             scope.launch { usageText.text = Translator.deeplUsage() }
         }
-        val getKey = button("Lấy key miễn phí", filled = false) {
+        val getKey = chip("Lấy key", p) {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.deepl.com/pro-api")))
         }
-        col.addView(hbox(check, getKey))
+        keyCard.addView(hbox(checkKey, getKey, show))
 
-        title("Bộ dịch")
-        val engineGroup = RadioGroup(this)
-        Engine.entries.forEach { e ->
-            engineGroup.addView(RadioButton(this).apply {
-                text = e.label; id = View.generateViewId(); isChecked = Prefs.engine == e
-                setOnCheckedChangeListener { _, c -> if (c) Prefs.engine = e }
-            })
-        }
-        col.addView(engineGroup)
-        col.addView(CheckBox(this).apply {
-            text = "Tự chuyển sang dịch offline khi DeepL lỗi hoặc hết quota"
-            isChecked = Prefs.fallbackOffline
-            setOnCheckedChangeListener { _, c -> Prefs.fallbackOffline = c }
-        })
+        val engineCard = card("Bộ dịch khi khoanh vùng / bôi đen")
+        engineCard.radios(Engine.entries, { it.label }, Prefs.engine) { Prefs.engine = it }
+        engineCard.check("Tự chuyển sang offline khi DeepL lỗi hoặc hết ký tự", Prefs.fallbackOffline) { Prefs.fallbackOffline = it }
 
-        title("Ngôn ngữ nguồn")
-        val langGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        SourceLang.entries.forEach { l ->
-            langGroup.addView(RadioButton(this).apply {
-                text = l.label; id = View.generateViewId(); isChecked = Prefs.sourceLang == l
-                setPadding(0, 0, dp(12), 0)
-                setOnCheckedChangeListener { _, c -> if (c) Prefs.sourceLang = l }
-            })
-        }
-        col.addView(langGroup)
-        body("Chế độ Tự động nhận ra tiếng Nhật khi có chữ kana (ひらがな/カタカナ). Có thể đổi nhanh bằng cách giữ bong bóng.")
+        val langCard = card("Ngôn ngữ nguồn")
+        langCard.radios(SourceLang.entries, { it.label }, Prefs.sourceLang, horizontal = true) { Prefs.sourceLang = it }
+        langCard.text("Chế độ Tự động nhận ra tiếng Nhật khi có chữ kana (ひらがな/カタカナ). Giữ bong bóng để đổi nhanh.")
 
-        title("Lĩnh vực (gợi ý ngữ cảnh cho DeepL)")
-        body("Câu này được gửi kèm làm ngữ cảnh, không tính vào quota. Nên viết bằng tiếng Anh.")
-        domainField = EditText(this).apply {
-            setText(Prefs.domainHint)
-            hint = "Ví dụ: Medical text. Use precise medical terminology."
-            textSize = 14f
-        }
-        col.addView(domainField, LinearLayout.LayoutParams(-1, -2))
-        val presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val hs = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) }
+        val domainCard = card("Lĩnh vực")
+        domainCard.text("Gửi kèm cho DeepL làm ngữ cảnh để chọn từ chuẩn hơn. Nên viết bằng tiếng Anh.")
+        domainField = field("Ví dụ: Medical text. Use precise medical terminology.", Prefs.domainHint)
+        domainCard.addFull(domainField)
+        val presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, dp(4)) }
         presetRow.addView(chip("Không", p) { domainField.setText("") })
         domainPresets.forEach { (name, hint) ->
             presetRow.addView(chip(name, p) { domainField.setText(hint) },
                 LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
         }
-        col.addView(hs, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        domainCard.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
 
-        title("Bảng thuật ngữ")
-        body("Mỗi dòng: chữ gốc = cách dịch cố định. Dùng cho tên nhân vật, thuật ngữ y/sinh học... Dòng bắt đầu bằng # là ghi chú.")
-        glossaryField = EditText(this).apply {
-            setText(Prefs.glossaryText)
-            hint = "林动 = Lâm Động\n心肌梗死 = nhồi máu cơ tim\n# ghi chú"
-            minLines = 4
-            gravity = Gravity.TOP
-            textSize = 15f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        }
-        col.addView(glossaryField, LinearLayout.LayoutParams(-1, -2))
+        val glossCard = card("Bảng thuật ngữ")
+        glossCard.text("Mỗi dòng: chữ gốc = cách dịch cố định. Dùng cho tên nhân vật, thuật ngữ chuyên ngành. Dòng bắt đầu bằng # là ghi chú.")
+        glossaryField = field("林动 = Lâm Động\n心肌梗死 = nhồi máu cơ tim\n# ghi chú", Prefs.glossaryText, multi = true)
+        glossCard.addFull(glossaryField)
 
-        title("Dịch thử")
-        val testIn = EditText(this).apply {
-            hint = "Nhập hoặc dán chữ Trung/Nhật..."
-            setText("细胞膜是包围细胞质的一层薄膜。")
-            textSize = 15f
-        }
-        col.addView(testIn, LinearLayout.LayoutParams(-1, -2))
-        col.addView(button("Dịch") {
+        val testCard = card("Dịch thử")
+        val testIn = field("Nhập hoặc dán chữ Trung/Nhật...", "细胞膜是包围细胞质的一层薄膜。")
+        testCard.addFull(testIn)
+        testCard.addFull(bigButton("Dịch", p) {
             save()
             startActivity(Intent(this, TranslateActivity::class.java)
                 .setAction(Intent.ACTION_SEND).putExtra(Intent.EXTRA_TEXT, testIn.text.toString()))
-        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(6) })
+        }, 10)
 
-        title("Cách dùng")
-        body("""
-            1. Khoanh vùng: chạm bong bóng 译 -> kéo ngón tay khoanh vùng chữ. Hoặc chạm nhẹ vào một đoạn để dịch nguyên đoạn đó, hoặc bấm "Cả màn hình".
-            2. Bôi đen chữ: ở app cho phép chọn chữ, bôi đen -> chọn "Dịch (Fishyu)" trong menu (có thể nằm trong mục ba chấm). Nếu app không có mục này, bấm "Chép" rồi giữ bong bóng -> "Dịch chữ đã copy".
-            3. Trong cửa sổ dịch: bôi đen một từ ở phần "Bản gốc" -> "Tra từ" để xem nghĩa theo ngữ cảnh, pinyin, âm Hán Việt.
-            4. Giữ bong bóng để mở menu: đổi ngôn ngữ, dịch chữ đã copy, tắt bong bóng. Kéo bong bóng để di chuyển.
-            5. Có thể thêm nút "Fishyu Translate" vào thanh cài đặt nhanh (kéo thanh thông báo xuống -> bút chì) để bật/tắt nhanh.
+        val howCard = card("Cách dùng")
+        listOf(
+            "Chạm bong bóng cá mập, kéo ngón tay để khoanh vùng chữ. Chạm nhẹ vào một đoạn để dịch cả đoạn, hoặc chọn \"Cả màn hình\".",
+            "Ở app cho phép chọn chữ: bôi đen rồi chọn \"Dịch (Fishyu)\" (có thể nằm trong mục ba chấm). App không có mục này thì bấm Chép, sau đó giữ bong bóng và chọn \"Dịch chữ đã copy\".",
+            "Trong cửa sổ dịch, bôi đen một từ ở phần Bản gốc rồi chọn \"Tra từ\" để xem nghĩa theo ngữ cảnh, pinyin và âm Hán Việt.",
+            "Chơi game: giữ bong bóng, chọn \"Dịch trực tiếp (game)\", khoanh khung thoại. Khung dịch kéo được bằng thanh trên cùng, A-/A+ để đổi cỡ chữ, nút DeepL/Offline để đổi bộ dịch.",
+            "Thêm nút Fishyu Translate vào thanh cài đặt nhanh để bật tắt cho tiện.",
+            "Từ Android 14, khi máy hỏi quyền ghi màn hình hãy chọn \"Toàn bộ màn hình\". Mỗi lần bật bong bóng máy sẽ hỏi lại.",
+        ).forEachIndexed { i, s -> howCard.addView(step(i + 1, s)) }
 
-            Android 14 trở lên: khi xin quyền ghi màn hình, chọn "Toàn bộ màn hình" (không chọn "Một ứng dụng"). Mỗi lần bật bong bóng hệ thống sẽ hỏi lại - đây là quy định của Android.
-        """.trimIndent(), p.fg)
+        col.addView(label("Từ điển CC-CEDICT (MDBG, CC BY-SA 4.0). Âm Hán Việt từ Unicode Unihan, chỉ để tham khảo. OCR và dịch offline: Google ML Kit.",
+            12f, p.muted).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(20), dp(8), 0) })
+    }
 
-        title("Nguồn dữ liệu")
-        body("Từ điển CC-CEDICT (MDBG, giấy phép CC BY-SA 4.0). Âm Hán Việt từ Unicode Unihan (kVietnamese), chỉ mang tính tham khảo. OCR và dịch offline bởi Google ML Kit.", size = 12f)
+    private fun step(n: Int, s: String): View {
+        val num = label("$n", 13f, p.onAccent, bold = true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(p.accent, dpf(12f), dp(2), p.ink)
+        }
+        val t = label(s, 14f, p.fg).apply { setLineSpacing(0f, 1.2f) }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(8), 0, 0)
+            addView(num, LinearLayout.LayoutParams(dp(24), dp(24)).apply { topMargin = dp(1) })
+            addView(t, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
+        }
+    }
+
+    private fun buildHero() {
+        val hero = FrameLayout(this).apply {
+            background = doodle(p, p.accentSoft, dpf(24f), dp(4))
+        }
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(16), dp(18), dp(20), dp(10))
+        }
+        inner.addView(ImageView(this).apply { setImageResource(R.drawable.mascot_shark) },
+            LinearLayout.LayoutParams(dp(150), dp(128)))
+        inner.addView(label("Fishyu Translate", 28f, p.fg, bold = true).apply { gravity = Gravity.CENTER })
+        inner.addView(label("Đọc truyện, tài liệu, chơi game tiếng Trung - Nhật bằng tiếng Việt", 14f, p.fg).apply {
+            gravity = Gravity.CENTER
+            alpha = 0.8f
+        })
+        inner.addView(WaveView(this, p), LinearLayout.LayoutParams(dp(180), dp(14)).apply { topMargin = dp(10) })
+        hero.addView(inner)
+        col.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
     }
 
     private fun refreshStatus() {
@@ -249,5 +309,26 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         refreshStatus()
         if (requestCode == 7) startActivity(Intent(this, ProjectionActivity::class.java))
+    }
+}
+
+private class WaveView(ctx: Context, private val p: Palette) : View(ctx) {
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = p.accent; style = Paint.Style.STROKE; strokeWidth = ctx.dpf(3f); strokeCap = Paint.Cap.ROUND
+    }
+    private val path = Path()
+
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val step = context.dpf(36f)
+        path.reset()
+        path.moveTo(0f, h * 0.5f)
+        var x = 0f
+        var up = true
+        while (x < w) {
+            path.quadTo(x + step / 2, if (up) 0f else h, x + step, h * 0.5f)
+            x += step; up = !up
+        }
+        c.drawPath(path, line)
     }
 }

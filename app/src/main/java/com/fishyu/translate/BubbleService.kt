@@ -22,7 +22,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
@@ -60,6 +60,7 @@ class BubbleService : Service() {
     private var panel: View? = null
     private var card: ResultCard? = null
     private var capturing = false
+    private var live: LiveSession? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -96,7 +97,7 @@ class BubbleService : Service() {
         val n: Notification = NotificationCompat.Builder(this, App.CHANNEL)
             .setSmallIcon(R.drawable.ic_tile)
             .setContentTitle("Bong bóng dịch đang bật")
-            .setContentText("Chạm bong bóng để khoanh vùng dịch")
+            .setContentText("Chạm bong bóng để dịch, giữ để mở menu")
             .setContentIntent(open)
             .addAction(0, "Tắt", stop)
             .setOngoing(true)
@@ -119,13 +120,20 @@ class BubbleService : Service() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        capturer?.onConfigChanged()
+        val c = capturer
+        val before = c?.let { it.width to it.height }
+        c?.onConfigChanged()
         removeSelector()
+        if (live != null && c != null && before != (c.width to c.height)) {
+            stopLive()
+            toast("Màn hình đã xoay, hãy chọn lại vùng dịch trực tiếp")
+        }
     }
 
     override fun onDestroy() {
         running = false
         removeView(bubble); bubble = null
+        stopLive()
         removeMenu(); removeSelector(); removePanel()
         capturer?.release(); capturer = null
         runCatching { projection?.stop() }; projection = null
@@ -138,15 +146,10 @@ class BubbleService : Service() {
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
         val p = Palette(this)
-        val size = dp(52)
-        val v = TextView(this).apply {
-            text = "译"
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(p.onAccent)
-            background = rounded(p.accent, size / 2f, dp(2), 0x55FFFFFF)
-            elevation = dpf(6f)
-            alpha = 0.92f
+        val size = dp(56)
+        val v = ImageView(this).apply {
+            setImageResource(R.drawable.bubble_shark)
+            alpha = 0.95f
         }
         val lp = WindowManager.LayoutParams(
             size, size, overlayType(),
@@ -209,18 +212,20 @@ class BubbleService : Service() {
         val p = Palette(this)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(p.bg, dpf(14f), dp(1), p.line)
-            elevation = dpf(8f)
-            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = doodle(p, p.bg, dpf(16f), dp(3))
+            setPadding(dp(6), dp(6), dp(9), dp(9))
         }
         fun item(t: String, act: () -> Unit) {
             box.addView(label(t, 15f, p.fg).apply {
-                setPadding(dp(14), dp(11), dp(18), dp(11))
+                typeface = Fonts.medium(this@BubbleService)
+                setPadding(dp(14), dp(9), dp(18), dp(9))
                 isClickable = true
                 setOnClickListener { removeMenu(); act() }
             })
         }
         item("Khoanh vùng để dịch") { startCapture() }
+        if (live == null) item("Dịch trực tiếp (game)") { startCapture(liveMode = true) }
+        else item("Dừng dịch trực tiếp") { stopLive() }
         item("Dịch chữ đã copy") { openTranslate(fromClipboard = true) }
         item("Ngôn ngữ: ${Prefs.sourceLang.label}") {
             Prefs.sourceLang = Prefs.sourceLang.next()
@@ -251,7 +256,7 @@ class BubbleService : Service() {
 
     private fun removeMenu() { removeView(menu); menu = null }
 
-    private fun startCapture() {
+    private fun startCapture(liveMode: Boolean = false) {
         val cap = capturer ?: run { toast("Mất quyền chụp màn hình, hãy bật lại bong bóng"); stopSelf(); return }
         if (capturing) return
         capturing = true
@@ -265,12 +270,73 @@ class BubbleService : Service() {
                 toast("Chưa chụp được màn hình, thử lại")
                 return@launch
             }
-            showSelector(shot)
+            if (liveMode) showLiveSelector(shot) else showSelector(shot)
         }
     }
 
+    private fun savedLiveRegion(): Rect? {
+        val c = capturer ?: return null
+        val v = Prefs.liveRegion.split(',').mapNotNull { it.toIntOrNull() }
+        if (v.size != 6 || v[4] != c.width || v[5] != c.height) return null
+        return Rect(v[0], v[1], v[2], v[3])
+    }
+
+    private fun showLiveSelector(shot: Bitmap) {
+        val saved = savedLiveRegion()
+        lateinit var view: RegionSelectView
+        view = RegionSelectView(this, shot,
+            onRegion = { r -> removeSelector(); startLive(r) },
+            onTap = { x, y -> view.setBusy("Đang tìm khung chữ..."); liveBlockAt(shot, x, y) },
+            onWholeScreen = {
+                removeSelector()
+                startLive(saved ?: Rect(0, 0, shot.width, shot.height))
+            },
+            onCancel = { removeSelector() },
+            hint = "Khoanh vùng khung thoại để dịch liên tục",
+            secondLabel = if (saved != null) "Vùng lần trước" else "Cả màn hình",
+        )
+        addSelector(view)
+    }
+
+    private fun liveBlockAt(shot: Bitmap, x: Int, y: Int) {
+        scope.launch {
+            val blocks = try { OcrEngine.raw(shot).first.textBlocks.mapNotNull { it.boundingBox } } catch (e: Exception) { emptyList() }
+            val hit = blocks.firstOrNull { Rect(it).apply { inset(-dp(14), -dp(14)) }.contains(x, y) }
+            removeSelector()
+            if (hit == null) { toast("Không thấy chữ ở chỗ này, hãy kéo để khoanh vùng"); return@launch }
+            val r = Rect(hit).apply { inset(-dp(24), -dp(16)) }
+            r.intersect(0, 0, shot.width, shot.height)
+            startLive(r)
+        }
+    }
+
+    private fun startLive(r: Rect) {
+        val cap = capturer ?: return
+        stopLive()
+        removePanel()
+        Prefs.liveRegion = "${r.left},${r.top},${r.right},${r.bottom},${cap.width},${cap.height}"
+        val s = LiveSession(this, wm, scope, cap, r,
+            obstacles = { listOfNotNull(bubbleRect()) },
+            onClose = { stopLive() })
+        live = s
+        s.start()
+        bubble?.visibility = View.VISIBLE
+    }
+
+    private fun stopLive() {
+        live?.stop()
+        live = null
+    }
+
+    private fun bubbleRect(): Rect? {
+        val b = bubble ?: return null
+        if (b.visibility != View.VISIBLE || !b.isAttachedToWindow) return null
+        val loc = IntArray(2)
+        b.getLocationOnScreen(loc)
+        return Rect(loc[0], loc[1], loc[0] + b.width, loc[1] + b.height)
+    }
+
     private fun showSelector(shot: Bitmap) {
-        removeSelector()
         lateinit var view: RegionSelectView
         view = RegionSelectView(this, shot,
             onRegion = { r ->
@@ -282,6 +348,12 @@ class BubbleService : Service() {
             onWholeScreen = { view.setBusy("Đang nhận diện cả màn hình..."); translateWhole(shot) },
             onCancel = { removeSelector() }
         )
+        addSelector(view)
+    }
+
+    private fun addSelector(view: RegionSelectView) {
+        removeSelector()
+        bubble?.visibility = View.INVISIBLE
         val lp = WindowManager.LayoutParams(
             -1, -1, overlayType(),
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or

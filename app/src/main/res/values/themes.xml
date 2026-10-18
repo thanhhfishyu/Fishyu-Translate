@@ -1,8 +1,9 @@
 <resources>
     <style name="Theme.Fishyu" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">#C2410C</item>
-        <item name="colorPrimaryContainer">#FFEDD5</item>
-        <item name="colorOnPrimaryContainer">#431407</item>
+        <item name="colorPrimary">#3F7FD0</item>
+        <item name="colorPrimaryContainer">#DCE9FA</item>
+        <item name="colorOnPrimaryContainer">#1E2A38</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
 
     <style name="Theme.Fishyu.Transparent" parent="Theme.Fishyu">

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -14,6 +15,7 @@ import android.os.HandlerThread
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import kotlinx.coroutines.delay
+import java.nio.ByteBuffer
 
 class ScreenCapturer(private val ctx: Context, private val projection: MediaProjection, onStopped: () -> Unit) {
     private val thread = HandlerThread("capture").apply { start() }
@@ -85,6 +87,31 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
         var waited = 0
         while (frameCounter == start && waited < 480) { delay(40); waited += 40 }
         return synchronized(lock) { latest?.let { toBitmap(it) } }
+    }
+
+    val frames: Long get() = frameCounter
+
+    fun grabRegion(r: Rect): Bitmap? = synchronized(lock) {
+        val img = latest ?: return null
+        val left = r.left.coerceIn(0, img.width - 1)
+        val top = r.top.coerceIn(0, img.height - 1)
+        val right = r.right.coerceIn(left + 1, img.width)
+        val bottom = r.bottom.coerceIn(top + 1, img.height)
+        val w = right - left
+        val h = bottom - top
+        val plane = img.planes[0]
+        val src = plane.buffer
+        val rowStride = plane.rowStride
+        val ps = plane.pixelStride
+        val out = ByteBuffer.allocateDirect(w * h * 4)
+        val row = ByteArray(w * ps)
+        for (y in 0 until h) {
+            src.position((top + y) * rowStride + left * ps)
+            src.get(row, 0, w * ps)
+            out.put(row, 0, w * 4)
+        }
+        out.rewind()
+        Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { copyPixelsFromBuffer(out) }
     }
 
     private fun toBitmap(img: Image): Bitmap {

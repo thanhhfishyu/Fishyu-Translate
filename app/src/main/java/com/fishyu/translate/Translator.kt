@@ -26,6 +26,8 @@ object Translator {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
     private val cache = LruCache<String, TranslateResult>(300)
+    private val offlineClients = HashMap<String, com.google.mlkit.nl.translate.Translator>()
+    private val offlineReady = HashSet<String>()
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     fun detect(text: String): SourceLang {
@@ -38,13 +40,18 @@ object Translator {
         }
     }
 
-    suspend fun translate(text: String, lang: SourceLang = detect(text), context: String? = null): TranslateResult {
+    suspend fun translate(
+        text: String,
+        lang: SourceLang = detect(text),
+        context: String? = null,
+        engine: Engine = Prefs.engine,
+    ): TranslateResult {
         val clean = text.trim()
         if (clean.isEmpty()) throw TranslateException("Không có chữ để dịch")
-        val key = "${Prefs.engine}|$lang|${context?.hashCode()}|${Prefs.glossaryText.hashCode()}|$clean"
+        val key = "$engine|$lang|${context?.hashCode()}|${Prefs.glossaryText.hashCode()}|$clean"
         cache.get(key)?.let { return it }
 
-        val useDeepl = Prefs.engine == Engine.DEEPL && Prefs.deeplKey.isNotEmpty()
+        val useDeepl = engine == Engine.DEEPL && Prefs.deeplKey.isNotEmpty()
         val result = if (useDeepl) {
             try {
                 deepl(clean, lang, context)
@@ -55,15 +62,34 @@ object Translator {
             }
         } else {
             val r = offline(clean, lang)
-            if (Prefs.engine == Engine.DEEPL) TranslateResult(r.text, r.engine, "Chưa nhập DeepL API key -> đang dịch offline")
+            if (engine == Engine.DEEPL) TranslateResult(r.text, r.engine, "Chưa nhập DeepL API key -> đang dịch offline")
             else r
         }
         cache.put(key, result)
         return result
     }
 
-    private fun baseUrl(k: String) =
-        if (k.endsWith(":fx")) "https://api-free.deepl.com" else "https://api.deepl.com"
+    private const val FREE_HOST = "https://api-free.deepl.com"
+    private const val PRO_HOST = "https://api.deepl.com"
+    @Volatile private var knownHost: Pair<String, String>? = null
+
+    private fun hosts(k: String): List<String> {
+        knownHost?.let { (key, host) -> if (key == k) return listOf(host) }
+        return if (k.endsWith(":fx")) listOf(FREE_HOST, PRO_HOST) else listOf(PRO_HOST, FREE_HOST)
+    }
+
+    private fun send(k: String, path: String, build: (Request.Builder) -> Request.Builder): Pair<Int, String> {
+        var last = 0 to ""
+        for (h in hosts(k)) {
+            val req = build(Request.Builder().url(h + path).header("Authorization", "DeepL-Auth-Key $k")).build()
+            last = http.newCall(req).execute().use { it.code to (it.body?.string() ?: "") }
+            if (last.first != 403) {
+                knownHost = k to h
+                return last
+            }
+        }
+        return last
+    }
 
     private fun escapeXml(s: String) =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -112,13 +138,8 @@ object Translator {
             }.toString()
 
             fun call(withModel: Boolean): Pair<Int, String> {
-                val req = Request.Builder()
-                    .url(baseUrl(k) + "/v2/translate")
-                    .header("Authorization", "DeepL-Auth-Key $k")
-                    .post(body(withModel).toRequestBody(JSON))
-                    .build()
                 return try {
-                    http.newCall(req).execute().use { it.code to (it.body?.string() ?: "") }
+                    send(k, "/v2/translate") { it.post(body(withModel).toRequestBody(JSON)) }
                 } catch (e: Exception) {
                     throw TranslateException("không kết nối được (${e.javaClass.simpleName})")
                 }
@@ -136,7 +157,7 @@ object Translator {
                     TranslateResult(unescapeXml(out), "DeepL")
                 }
                 403 -> throw TranslateException("API key không hợp lệ")
-                456 -> throw TranslateException("đã hết quota tháng này")
+                456 -> throw TranslateException("đã hết số ký tự của gói")
                 429 -> throw TranslateException("gửi quá nhanh, thử lại sau")
                 else -> throw TranslateException("mã lỗi $code ${resp.take(120)}")
             }
@@ -144,19 +165,13 @@ object Translator {
 
     suspend fun deeplUsage(key: String = Prefs.deeplKey): String = withContext(Dispatchers.IO) {
         if (key.isBlank()) return@withContext "Chưa có key"
-        val req = Request.Builder()
-            .url(baseUrl(key) + "/v2/usage")
-            .header("Authorization", "DeepL-Auth-Key $key")
-            .get().build()
         try {
-            http.newCall(req).execute().use { r ->
-                val s = r.body?.string() ?: ""
-                if (r.code != 200) return@use if (r.code == 403) "Key không hợp lệ" else "Lỗi ${r.code}"
-                val j = JSONObject(s)
-                val used = j.optLong("character_count")
-                val lim = j.optLong("character_limit")
-                "Đã dùng %,d / %,d ký tự tháng này".format(used, lim)
-            }
+            val (code, s) = send(key, "/v2/usage") { it.get() }
+            if (code != 200) return@withContext if (code == 403) "Key không hợp lệ" else "Lỗi $code"
+            val j = JSONObject(s)
+            val used = j.optLong("character_count")
+            val lim = j.optLong("character_limit")
+            "Key hợp lệ. Đã dùng %,d / %,d ký tự".format(used, lim)
         } catch (e: Exception) {
             "Không kết nối được"
         }
@@ -169,20 +184,24 @@ object Translator {
         }
         var t = text
         for ((a, b) in Prefs.glossary()) t = t.replace(a, b)
-        val tr = Translation.getClient(
-            TranslatorOptions.Builder()
-                .setSourceLanguage(src)
-                .setTargetLanguage(TranslateLanguage.VIETNAMESE)
-                .build()
-        )
+        val tr = offlineClients.getOrPut(src) {
+            Translation.getClient(
+                TranslatorOptions.Builder()
+                    .setSourceLanguage(src)
+                    .setTargetLanguage(TranslateLanguage.VIETNAMESE)
+                    .build()
+            )
+        }
         try {
-            tr.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
+            if (src !in offlineReady) {
+                tr.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
+                offlineReady.add(src)
+            }
             val out = tr.translate(t).await()
             return TranslateResult(out, "Google offline")
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             throw TranslateException("Dịch offline lỗi: ${e.message ?: "không tải được gói ngôn ngữ"}")
-        } finally {
-            tr.close()
         }
     }
 }

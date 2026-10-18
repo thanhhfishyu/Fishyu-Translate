@@ -47,6 +47,22 @@ object Prefs {
         get() = sp.getString("glossary", "")!!
         set(v) = sp.edit().putString("glossary", v).apply()
 
+    var liveEngine: Engine
+        get() = runCatching { Engine.valueOf(sp.getString("live_engine", "DEEPL")!!) }.getOrDefault(Engine.DEEPL)
+        set(v) = sp.edit().putString("live_engine", v.name).apply()
+
+    var liveFontSp: Int
+        get() = sp.getInt("live_font", 16)
+        set(v) = sp.edit().putInt("live_font", v.coerceIn(11, 28)).apply()
+
+    var liveShowSource: Boolean
+        get() = sp.getBoolean("live_src", false)
+        set(v) = sp.edit().putBoolean("live_src", v).apply()
+
+    var liveRegion: String
+        get() = sp.getString("live_region", "")!!
+        set(v) = sp.edit().putString("live_region", v).apply()
+
     var bubbleX: Int
         get() = sp.getInt("bx", -1)
         set(v) = sp.edit().putInt("bx", v).apply()

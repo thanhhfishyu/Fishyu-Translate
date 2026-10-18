@@ -43,15 +43,14 @@ class ResultCard(
 
     init {
         orientation = VERTICAL
-        background = rounded(p.bg, ctx.dpf(18f), ctx.dp(1), p.line)
-        elevation = ctx.dpf(8f)
+        background = ctx.doodle(p, p.bg, ctx.dpf(18f), ctx.dp(4))
         val pad = ctx.dp(14)
-        setPadding(pad, ctx.dp(10), pad, pad)
+        setPadding(pad, ctx.dp(10), pad + ctx.dp(4), pad + ctx.dp(4))
 
         langChip = ctx.chip(lang.label, p) { cycleLang() }
         engineLabel = ctx.label("", 12f, p.muted)
         val copy = ctx.chip("Chép", p) { copyTranslation() }
-        val close = ctx.chip("Đóng", p) { onClose() }
+        val close = ctx.chip("Đóng", p, filled = true) { onClose() }
         header = ctx.hbox(langChip, engineLabel, ctx.spacer(), copy, close)
         addView(header, LayoutParams(-1, -2))
 
@@ -77,7 +76,7 @@ class ResultCard(
         source = EditText(ctx).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTextColor(p.fg)
-            background = rounded(p.surface, ctx.dpf(10f))
+            background = rounded(p.surface, ctx.dpf(12f), ctx.dp(2), p.accentSoft)
             setPadding(ctx.dp(10), ctx.dp(8), ctx.dp(10), ctx.dp(8))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
@@ -186,7 +185,7 @@ class ResultCard(
         val ctx = context()
         val box = LinearLayout(ctx).apply {
             orientation = VERTICAL
-            background = rounded(p.surface, ctx.dpf(12f))
+            background = rounded(p.surface, ctx.dpf(14f), ctx.dp(2), p.accentSoft)
             setPadding(ctx.dp(12), ctx.dp(10), ctx.dp(12), ctx.dp(10))
         }
         dictBox.addView(box, LayoutParams(-1, -2).apply { topMargin = ctx.dp(10) })

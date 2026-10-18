@@ -23,6 +23,8 @@ class RegionSelectView(
     private val onTap: (Int, Int) -> Unit,
     private val onWholeScreen: () -> Unit,
     private val onCancel: () -> Unit,
+    private val hint: String = "Kéo để khoanh vùng - chạm vào đoạn chữ để dịch đoạn đó",
+    private val secondLabel: String = "Cả màn hình",
 ) : View(ctx) {
     private val p = Palette(ctx)
     private val dim = Paint().apply { color = Color.argb(110, 0, 0, 0) }
@@ -32,8 +34,9 @@ class RegionSelectView(
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE; textSize = ctx.dpf(15f); textAlign = Paint.Align.CENTER
+        typeface = Fonts.medium(ctx)
     }
-    private val pill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 20, 20, 20) }
+    private val pill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(230, 30, 42, 56) }
     private val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.accent }
 
     private var sx = 0f; private var sy = 0f; private var ex = 0f; private var ey = 0f
@@ -62,7 +65,11 @@ class RegionSelectView(
             c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dim)
         }
 
-        val msg = status ?: "Kéo để khoanh vùng  -  chạm vào đoạn chữ để dịch đoạn đó"
+        val msg = status ?: hint
+        textPaint.textSize = context.dpf(15f)
+        while (textPaint.measureText(msg) > width - context.dpf(56f) && textPaint.textSize > context.dpf(10f)) {
+            textPaint.textSize -= context.dpf(0.5f)
+        }
         val tw = textPaint.measureText(msg) + context.dpf(32f)
         val top = context.dpf(56f)
         c.drawRoundRect(RectF(width / 2f - tw / 2, top, width / 2f + tw / 2, top + context.dpf(40f)),
@@ -76,8 +83,9 @@ class RegionSelectView(
             wholeBtn.set(width / 2f + gap / 2, by, width / 2f + bw + gap / 2, by + bh)
             c.drawRoundRect(cancelBtn, bh / 2, bh / 2, pill)
             c.drawRoundRect(wholeBtn, bh / 2, bh / 2, btnPaint)
+            textPaint.textSize = context.dpf(15f)
             c.drawText("Huỷ", cancelBtn.centerX(), cancelBtn.centerY() + context.dpf(5f), textPaint)
-            c.drawText("Cả màn hình", wholeBtn.centerX(), wholeBtn.centerY() + context.dpf(5f), textPaint)
+            c.drawText(secondLabel, wholeBtn.centerX(), wholeBtn.centerY() + context.dpf(5f), textPaint)
         }
     }
 
