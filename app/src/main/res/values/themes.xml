@@ -1,0 +1,24 @@
+<resources>
+    <style name="Theme.Fishyu" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#C2410C</item>
+        <item name="colorPrimaryContainer">#FFEDD5</item>
+        <item name="colorOnPrimaryContainer">#431407</item>
+    </style>
+
+    <style name="Theme.Fishyu.Transparent" parent="Theme.Fishyu">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
+    <style name="Theme.Fishyu.Popup" parent="Theme.Fishyu">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.25</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+    </style>
+</resources>
