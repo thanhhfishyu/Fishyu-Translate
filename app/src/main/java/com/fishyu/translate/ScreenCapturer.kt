@@ -107,21 +107,28 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
         return true
     }
 
-    suspend fun capture(): Bitmap? {
-        delay(150)
-        val (w, h, dpi) = metrics()
-        val fresh = swapSurface(w, h, dpi)
-        if (!fresh) {
-            val start = frameCounter
-            var t = 0
-            while (frameCounter == start && t < 600) { delay(40); t += 40 }
-        }
-        var waited = 0
-        while (waited < 1500) {
+    suspend fun capture(start: Long = frameCounter): Bitmap? {
+        val (w, h, _) = metrics()
+        if (w != width || h != height) onConfigChanged()
+        if (waitFrameAfter(start, 900)) {
+            delay(60)
             synchronized(lock) { latest?.let { return toBitmap(it) } }
-            delay(30); waited += 30
+        }
+        val (w2, h2, dpi) = metrics()
+        val before = frameCounter
+        if (swapSurface(w2, h2, dpi) && waitFrameAfter(before, 900)) {
+            synchronized(lock) { latest?.let { return toBitmap(it) } }
         }
         return null
+    }
+
+    private suspend fun waitFrameAfter(start: Long, timeoutMs: Int): Boolean {
+        var t = 0
+        while (t < timeoutMs) {
+            if (frameCounter > start) return true
+            delay(30); t += 30
+        }
+        return frameCounter > start
     }
 
     val frames: Long get() = frameCounter

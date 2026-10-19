@@ -72,6 +72,10 @@ class MainActivity : AppCompatActivity() {
         build()
     }
 
+    private fun View.notSensitive() {
+        if (Build.VERSION.SDK_INT >= 35) contentSensitivity = View.CONTENT_SENSITIVITY_NOT_SENSITIVE
+    }
+
     override fun onResume() {
         super.onResume()
         refreshStatus()
@@ -175,10 +179,12 @@ class MainActivity : AppCompatActivity() {
         val keyCard = card("DeepL API key")
         keyCard.text("Gói Developer miễn phí của DeepL cho 1 triệu ký tự dùng một lần (không làm mới hằng tháng). Mỗi chữ Hán tính 1 ký tự. Phần gợi ý lĩnh vực và ngữ cảnh không bị tính.")
         keyField = field("Dán DeepL API key vào đây", Prefs.deeplKey).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             transformationMethod = PasswordTransformationMethod.getInstance()
             isSingleLine = true
             typeface = android.graphics.Typeface.DEFAULT
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            notSensitive()
         }
         keyCard.addFull(keyField)
         usageText = keyCard.text("")

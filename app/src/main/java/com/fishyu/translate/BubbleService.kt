@@ -298,16 +298,21 @@ class BubbleService : Service() {
         }
         if (capturing) return
         capturing = true
+        val startFrame = cap.frames
         removePanel()
         live?.setHidden(true)
         bubble?.visibility = View.INVISIBLE
         scope.launch {
-            val shot = try { cap.capture() } catch (e: Exception) { null }
+            val shot = try { cap.capture(startFrame) } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                CrashLog.save(this@BubbleService, e, "capture")
+                null
+            }
             capturing = false
             if (shot == null) {
                 bubble?.visibility = View.VISIBLE
                 live?.setHidden(false)
-                toast("Chưa chụp được màn hình. Nếu vẫn lỗi, hãy tắt rồi bật lại bong bóng và chọn \"Toàn bộ màn hình\"")
+                toast("Chưa chụp được màn hình. Hãy thử lại; nếu vẫn lỗi, tắt rồi bật lại bong bóng và chọn \"Toàn bộ màn hình\"")
                 return@launch
             }
             if (liveMode) showLiveSelector(shot) else showSelector(shot)
