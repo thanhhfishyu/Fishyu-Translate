@@ -11,6 +11,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        CrashLog.install(this)
         Prefs.init(this)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(

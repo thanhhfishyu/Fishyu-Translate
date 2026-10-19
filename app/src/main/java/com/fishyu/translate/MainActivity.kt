@@ -153,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         })
 
     private fun build() {
+        buildErrorCard()
         buildCoffee()
         buildHero()
 
@@ -256,6 +257,35 @@ class MainActivity : AppCompatActivity() {
             addView(num, LinearLayout.LayoutParams(dp(24), dp(24)).apply { topMargin = dp(1) })
             addView(t, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
         }
+    }
+
+    private fun buildErrorCard() {
+        val log = CrashLog.read(this) ?: return
+        lateinit var c: LinearLayout
+        c = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = doodle(p, p.bg, dpf(18f), dp(3))
+            setPadding(dp(14), dp(10), dp(18), dp(14))
+        }
+        c.addView(label("App vừa gặp lỗi", 17f, p.error, bold = true))
+        c.addView(label("Bấm \"Chép lỗi\" rồi gửi cho người làm app để sửa nhanh hơn.", 13f, p.muted))
+        c.addView(label(log.lines().drop(3).take(6).joinToString("\n"), 11f, p.fg).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            background = rounded(p.surface, dpf(10f))
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8); bottomMargin = dp(8) })
+        c.addView(hbox(
+            chip("Chép lỗi", p, filled = true) {
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Lỗi Fishyu Translate", log))
+                android.widget.Toast.makeText(this, "Đã chép nội dung lỗi", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            chip("Ẩn", p) {
+                CrashLog.clear(this)
+                col.removeView(c)
+            },
+        ))
+        col.addView(c, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4); bottomMargin = dp(12) })
     }
 
     private fun buildCoffee() {

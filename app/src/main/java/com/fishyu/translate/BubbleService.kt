@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +41,8 @@ class BubbleService : Service() {
         const val ACTION_STOP = "stop"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
+        const val EXTRA_TOKEN = "token"
+        private var usedToken = 0L
         @Volatile var running = false
             private set
 
@@ -48,7 +51,11 @@ class BubbleService : Service() {
         }
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val errors = CoroutineExceptionHandler { _, e ->
+        CrashLog.save(this, e, "BubbleService")
+        toast("Lỗi: ${CrashLog.shortReason(e)}")
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + errors)
     private lateinit var wm: WindowManager
     private var projection: MediaProjection? = null
     private var capturer: ScreenCapturer? = null
@@ -74,15 +81,40 @@ class BubbleService : Service() {
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
             ACTION_START -> {
-                startForegroundCompat()
+                val token = intent.getLongExtra(EXTRA_TOKEN, 0L)
+                if (token != 0L && token == usedToken) return START_NOT_STICKY
+                usedToken = token
+                try {
+                    startForegroundCompat()
+                } catch (e: Throwable) {
+                    CrashLog.save(this, e, "startForeground")
+                    toast("Không bật được bong bóng: ${CrashLog.shortReason(e)}")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 val code = intent.getIntExtra(EXTRA_CODE, 0)
                 @Suppress("DEPRECATION")
                 val data: Intent? = if (Build.VERSION.SDK_INT >= 33)
                     intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
                 else intent.getParcelableExtra(EXTRA_DATA)
                 if (data == null) { stopSelf(); return START_NOT_STICKY }
-                setupProjection(code, data)
-                if (bubble == null) showBubble()
+                try {
+                    setupProjection(code, data)
+                } catch (e: Throwable) {
+                    CrashLog.save(this, e, "setupProjection")
+                    capturer = null
+                    runCatching { projection?.stop() }
+                    projection = null
+                    toast("Không lấy được quyền chụp màn hình: ${CrashLog.shortReason(e)}. Bong bóng vẫn dùng được cho \"Dịch chữ đã copy\".")
+                }
+                try {
+                    if (bubble == null) showBubble()
+                } catch (e: Throwable) {
+                    CrashLog.save(this, e, "showBubble")
+                    toast("Không hiện được bong bóng: ${CrashLog.shortReason(e)}")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 running = true
             }
         }
@@ -109,8 +141,10 @@ class BubbleService : Service() {
 
     private fun setupProjection(code: Int, data: Intent) {
         stopLive()
-        capturer?.release()
-        projection?.stop()
+        runCatching { capturer?.release() }
+        capturer = null
+        runCatching { projection?.stop() }
+        projection = null
         val mpm = getSystemService(MediaProjectionManager::class.java)
         val mp = mpm.getMediaProjection(code, data) ?: run { stopSelf(); return }
         projection = mp
@@ -135,8 +169,8 @@ class BubbleService : Service() {
         running = false
         removeView(bubble); bubble = null
         stopLive()
-        removeMenu(); removeSelector(); removePanel()
-        capturer?.release(); capturer = null
+        runCatching { removeMenu(); removeSelector(); removePanel() }
+        runCatching { capturer?.release() }; capturer = null
         runCatching { projection?.stop() }; projection = null
         scope.cancel()
         super.onDestroy()
@@ -258,7 +292,10 @@ class BubbleService : Service() {
     private fun removeMenu() { removeView(menu); menu = null }
 
     private fun startCapture(liveMode: Boolean = false) {
-        val cap = capturer ?: run { toast("Mất quyền chụp màn hình, hãy bật lại bong bóng"); stopSelf(); return }
+        val cap = capturer ?: run {
+            toast("Chưa có quyền chụp màn hình. Hãy tắt rồi bật lại bong bóng, hoặc giữ bong bóng để dịch chữ đã copy")
+            return
+        }
         if (capturing) return
         capturing = true
         removePanel()

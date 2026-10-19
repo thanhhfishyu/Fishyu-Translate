@@ -83,27 +83,39 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
         swapSurface(w, h, dpi)
     }
 
-    private fun swapSurface(w: Int, h: Int, dpi: Int) {
-        if (released) return
+    private fun swapSurface(w: Int, h: Int, dpi: Int): Boolean {
+        if (released) return false
         val old = reader
         val r = newReader(w, h)
+        try {
+            if (w != displayW || h != displayH) {
+                display?.resize(w, h, dpi)
+                displayW = w; displayH = h
+            }
+            display?.surface = r.surface
+        } catch (e: Throwable) {
+            CrashLog.save(ctx, e, "swapSurface")
+            runCatching { r.close() }
+            return false
+        }
         synchronized(lock) {
             latest?.close(); latest = null
             width = w; height = h
             reader = r
         }
-        if (w != displayW || h != displayH) {
-            display?.resize(w, h, dpi)
-            displayW = w; displayH = h
-        }
-        display?.surface = r.surface
         handler.postDelayed({ runCatching { old?.close() } }, 300)
+        return true
     }
 
     suspend fun capture(): Bitmap? {
         delay(150)
         val (w, h, dpi) = metrics()
-        swapSurface(w, h, dpi)
+        val fresh = swapSurface(w, h, dpi)
+        if (!fresh) {
+            val start = frameCounter
+            var t = 0
+            while (frameCounter == start && t < 600) { delay(40); t += 40 }
+        }
         var waited = 0
         while (waited < 1500) {
             synchronized(lock) { latest?.let { return toBitmap(it) } }

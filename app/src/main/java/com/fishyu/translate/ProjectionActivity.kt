@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 
 class ProjectionActivity : Activity() {
     private val req = 42
+    private var handled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,6 +22,7 @@ class ProjectionActivity : Activity() {
             finish()
             return
         }
+        if (savedInstanceState != null) return
         val mpm = getSystemService(MediaProjectionManager::class.java)
         @Suppress("DEPRECATION")
         startActivityForResult(mpm.createScreenCaptureIntent(), req)
@@ -31,12 +33,14 @@ class ProjectionActivity : Activity() {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == req) {
-            if (resultCode == RESULT_OK && data != null) {
+            if (resultCode == RESULT_OK && data != null && !handled) {
+                handled = true
                 ContextCompat.startForegroundService(this,
                     Intent(this, BubbleService::class.java)
                         .setAction(BubbleService.ACTION_START)
                         .putExtra(BubbleService.EXTRA_CODE, resultCode)
-                        .putExtra(BubbleService.EXTRA_DATA, data))
+                        .putExtra(BubbleService.EXTRA_DATA, data)
+                        .putExtra(BubbleService.EXTRA_TOKEN, System.nanoTime()))
                 Toast.makeText(this, "Đã bật bong bóng. Chạm vào nó để dịch.", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Cần quyền chụp màn hình để dịch bằng bong bóng", Toast.LENGTH_SHORT).show()
