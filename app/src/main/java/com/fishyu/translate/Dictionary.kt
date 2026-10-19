@@ -17,7 +17,9 @@ object Dictionary {
     fun preload(ctx: Context) {
         if (loader == null) {
             val app = ctx.applicationContext
-            loader = App.scope.async(Dispatchers.IO) { load(app) }
+            loader = App.scope.async(Dispatchers.IO) {
+                try { load(app) } catch (e: Throwable) { CrashLog.save(app, e, "Dictionary.load") }
+            }
         }
     }
 

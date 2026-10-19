@@ -2,7 +2,9 @@ package com.fishyu.translate
 
 import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -25,7 +27,17 @@ class ProjectionActivity : Activity() {
         if (savedInstanceState != null) return
         val mpm = getSystemService(MediaProjectionManager::class.java)
         @Suppress("DEPRECATION")
-        startActivityForResult(mpm.createScreenCaptureIntent(), req)
+        val consent = if (Build.VERSION.SDK_INT >= 34) {
+            runCatching { mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay()) }
+                .getOrElse { mpm.createScreenCaptureIntent() }
+        } else mpm.createScreenCaptureIntent()
+        try {
+            startActivityForResult(consent, req)
+        } catch (e: Throwable) {
+            CrashLog.save(this, e, "consent")
+            Toast.makeText(this, "Không mở được hộp thoại cấp quyền chụp màn hình", Toast.LENGTH_LONG).show()
+            finish()
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -40,7 +52,8 @@ class ProjectionActivity : Activity() {
                         .setAction(BubbleService.ACTION_START)
                         .putExtra(BubbleService.EXTRA_CODE, resultCode)
                         .putExtra(BubbleService.EXTRA_DATA, data)
-                        .putExtra(BubbleService.EXTRA_TOKEN, System.nanoTime()))
+                        .putExtra(BubbleService.EXTRA_TOKEN, System.nanoTime())
+                        .putExtra(BubbleService.EXTRA_THEN, intent.getIntExtra(BubbleService.EXTRA_THEN, 0)))
                 Toast.makeText(this, "Đã bật bong bóng. Chạm vào nó để dịch.", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Cần quyền chụp màn hình để dịch bằng bong bóng", Toast.LENGTH_SHORT).show()

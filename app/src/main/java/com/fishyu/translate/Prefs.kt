@@ -63,13 +63,17 @@ object Prefs {
         get() = sp.getString("live_region", "")!!
         set(v) = sp.edit().putString("live_region", v).apply()
 
-    var bubbleX: Int
-        get() = sp.getInt("bx", -1)
-        set(v) = sp.edit().putInt("bx", v).apply()
+    var bubbleRight: Boolean
+        get() = sp.getBoolean("bubble_right", true)
+        set(v) = sp.edit().putBoolean("bubble_right", v).apply()
 
-    var bubbleY: Int
-        get() = sp.getInt("by", 300)
-        set(v) = sp.edit().putInt("by", v).apply()
+    var bubbleYFrac: Float
+        get() = sp.getFloat("bubble_yfrac", 0.3f).let { if (it.isNaN()) 0.3f else it.coerceIn(0f, 1f) }
+        set(v) = sp.edit().putFloat("bubble_yfrac", v.coerceIn(0f, 1f)).apply()
+
+    fun resetBubble() {
+        sp.edit().remove("bubble_right").remove("bubble_yfrac").remove("bx").remove("by").apply()
+    }
 
     fun glossary(): List<Pair<String, String>> =
         glossaryText.lineSequence()

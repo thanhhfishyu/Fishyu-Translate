@@ -65,16 +65,8 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
         }
 
     private fun metrics(): Triple<Int, Int, Int> {
-        val wm = ctx.getSystemService(WindowManager::class.java)
-        val dm = ctx.resources.displayMetrics
-        return if (android.os.Build.VERSION.SDK_INT >= 30) {
-            val b = wm.maximumWindowMetrics.bounds
-            Triple(b.width(), b.height(), dm.densityDpi)
-        } else {
-            val real = DisplayMetrics()
-            @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(real)
-            Triple(real.widthPixels, real.heightPixels, real.densityDpi)
-        }
+        val z = ScreenInfo.get(ctx)
+        return Triple(z.width, z.height, z.dpi)
     }
 
     fun onConfigChanged() {

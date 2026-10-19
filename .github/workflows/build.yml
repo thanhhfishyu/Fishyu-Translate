@@ -27,7 +27,7 @@ jobs:
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew testReleaseUnitTest assembleRelease --no-daemon
           mkdir -p out
           cp app/build/outputs/apk/release/app-release.apk out/FishyuTranslate-v1.0.${{ github.run_number }}.apk
 

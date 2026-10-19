@@ -48,12 +48,10 @@ class LiveSession(
     private var paused = false
     private var lastOcrSig: IntArray? = null
     private var lastOcrAt = 0L
-    private var pendingNorm = ""
-    private var shownNorm = ""
+    private val gate = LiveGate()
     private var emptyStreak = 0
     private var sentChars = 0
     private val history = ArrayDeque<String>()
-    private val done = LinkedHashMap<String, String>()
 
     fun start() {
         showFrame()
@@ -116,6 +114,17 @@ class LiveSession(
         lp.y = region.top - pad
         wm.addView(v, lp)
         frame = v
+        v.post {
+            if (!v.isAttachedToWindow) return@post
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            val dx = (region.left - pad) - loc[0]
+            val dy = (region.top - pad) - loc[1]
+            if (dx != 0 || dy != 0) {
+                lp.x += dx; lp.y += dy
+                runCatching { wm.updateViewLayout(v, lp) }
+            }
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -132,8 +141,7 @@ class LiveSession(
         engineChip = ctx.chip(engineLabel(), p) {
             Prefs.liveEngine = if (Prefs.liveEngine == Engine.DEEPL) Engine.OFFLINE else Engine.DEEPL
             engineChip.text = engineLabel()
-            done.clear()
-            shownNorm = ""
+            gate.reset(clearDone = true)
             lastOcrSig = null
         }
         val smaller = ctx.chip("A-", p) { Prefs.liveFontSp = Prefs.liveFontSp - 2; applyFont() }
@@ -173,9 +181,9 @@ class LiveSession(
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { dx = e.rawX; dy = e.rawY; sx = boxLp.x; sy = boxLp.y }
                 MotionEvent.ACTION_MOVE -> {
-                    boxLp.x = sx + (e.rawX - dx).toInt()
-                    boxLp.y = sy + (e.rawY - dy).toInt()
-                    wm.updateViewLayout(b, boxLp)
+                    boxLp.x = (sx + (e.rawX - dx).toInt()).coerceIn(0, (capturer.width - b.width).coerceAtLeast(0))
+                    boxLp.y = (sy + (e.rawY - dy).toInt()).coerceIn(0, (capturer.height - b.height).coerceAtLeast(0))
+                    runCatching { wm.updateViewLayout(b, boxLp) }
                 }
             }
             true
@@ -190,10 +198,10 @@ class LiveSession(
         val sh = capturer.height
         if (boxLp.y < region.top && boxLp.y + b.height > region.top - ctx.dp(4)) {
             boxLp.y = (region.top - b.height - ctx.dp(10)).coerceAtLeast(0)
-            wm.updateViewLayout(b, boxLp)
+            runCatching { wm.updateViewLayout(b, boxLp) }
         } else if (boxLp.y + b.height > sh) {
             boxLp.y = (sh - b.height).coerceAtLeast(0)
-            wm.updateViewLayout(b, boxLp)
+            runCatching { wm.updateViewLayout(b, boxLp) }
         }
     }
 
@@ -208,7 +216,7 @@ class LiveSession(
         paused = !paused
         pauseChip.text = if (paused) "Tiếp" else "Dừng"
         status.text = if (paused) "Đã dừng" else "Đang theo dõi"
-        if (!paused) { lastOcrSig = null; pendingNorm = ""; shownNorm = "" }
+        if (!paused) { lastOcrSig = null; gate.reset() }
     }
 
     private fun loop() {
@@ -223,7 +231,7 @@ class LiveSession(
                 val prev = lastOcrSig
                 val changed = prev == null || diff(prev, sig) >= 3
                 val now = System.currentTimeMillis()
-                if ((changed || pendingNorm.isNotEmpty()) && now - lastOcrAt >= 650) {
+                if ((changed || gate.hasPending) && now - lastOcrAt >= 650) {
                     lastOcrSig = sig
                     lastOcrAt = now
                     process(bmp)
@@ -250,38 +258,34 @@ class LiveSession(
             return
         }
         val text = ocr.text.replace("\n", "").trim()
-        val norm = normalize(text)
-        if (norm.length < 2) {
-            pendingNorm = ""
-            if (++emptyStreak == 3 && shownNorm.isEmpty()) status.text = "Chưa thấy chữ trong vùng đã chọn"
-            return
+        when (val d = gate.offer(text)) {
+            LiveGate.Decision.Empty, LiveGate.Decision.NotCjk -> {
+                if (++emptyStreak == 3 && !gate.hasShown) status.text = "Chưa thấy chữ Trung/Nhật trong vùng đã chọn"
+            }
+            LiveGate.Decision.Same, LiveGate.Decision.Wait -> emptyStreak = 0
+            is LiveGate.Decision.Reuse -> {
+                emptyStreak = 0
+                source.text = text
+                translation.text = d.translation
+                translation.post { fitBox() }
+            }
+            is LiveGate.Decision.Translate -> {
+                emptyStreak = 0
+                source.text = text
+                translateNow(text, d.norm, ocr.lang)
+            }
         }
-        emptyStreak = 0
-        if (similarity(norm, shownNorm) >= 0.8) { pendingNorm = ""; return }
-        if (similarity(norm, pendingNorm) < 0.9) {
-            pendingNorm = norm
-            return
-        }
-        pendingNorm = ""
-        shownNorm = norm
-        source.text = text
+    }
 
-        val reuse = done.entries.firstOrNull { similarity(it.key, norm) >= 0.85 }?.value
-        if (reuse != null) {
-            translation.text = reuse
-            translation.post { fitBox() }
-            return
-        }
-
+    private suspend fun translateNow(text: String, norm: String, lang: SourceLang) {
         status.text = "Đang dịch..."
         translation.alpha = 0.55f
         try {
             val ctxText = history.joinToString("\n").ifBlank { null }
-            val r = Translator.translate(text, ocr.lang, ctxText, Prefs.liveEngine)
+            val r = Translator.translate(text, lang, ctxText, Prefs.liveEngine)
             translation.text = r.text
             if (r.engine == "DeepL") sentChars += text.length
-            done[norm] = r.text
-            if (done.size > 40) done.remove(done.keys.first())
+            gate.remember(norm, r.text)
             status.text = when {
                 r.note != null -> "Đang dịch offline (DeepL lỗi)"
                 Prefs.liveEngine == Engine.DEEPL -> "Đang theo dõi - đã gửi DeepL khoảng $sentChars ký tự"
@@ -289,35 +293,14 @@ class LiveSession(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            status.text = "Lỗi: ${e.message?.take(60)}"
-            shownNorm = ""
+            status.text = "Lỗi: ${e.message?.take(60)} - sẽ thử lại"
+            gate.failed()
+            lastOcrAt = System.currentTimeMillis() + 4000
         }
         translation.alpha = 1f
         history.addLast(text)
         while (history.size > 3) history.removeFirst()
         translation.post { fitBox() }
-    }
-
-    private fun normalize(s: String): String = buildString {
-        for (c in s) if (Character.isLetterOrDigit(c)) append(c)
-    }
-
-    private fun similarity(a: String, b: String): Double {
-        if (a == b) return 1.0
-        if (a.isEmpty() || b.isEmpty()) return 0.0
-        val n = a.length
-        val m = b.length
-        var prev = IntArray(m + 1) { it }
-        var cur = IntArray(m + 1)
-        for (i in 1..n) {
-            cur[0] = i
-            for (j in 1..m) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
-            }
-            val t = prev; prev = cur; cur = t
-        }
-        return 1.0 - prev[m].toDouble() / maxOf(n, m)
     }
 
     private fun signature(b: Bitmap): IntArray {

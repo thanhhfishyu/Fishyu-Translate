@@ -1,6 +1,7 @@
 package com.fishyu.translate
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -31,15 +32,19 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
-    private val scope = MainScope()
+    private val scope = MainScope() + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+        CrashLog.save(App.instance, e, "MainActivity")
+    }
     private lateinit var p: Palette
     private lateinit var col: LinearLayout
     private lateinit var toggleBtn: TextView
     private lateinit var permText: TextView
+    private var batteryText: TextView? = null
     private lateinit var keyField: EditText
     private lateinit var usageText: TextView
     private lateinit var domainField: EditText
@@ -56,7 +61,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         p = Palette(this)
-        Dictionary.preload(this)
 
         val scroll = ScrollView(this).apply { setBackgroundColor(p.page) }
         col = LinearLayout(this).apply {
@@ -168,6 +172,27 @@ class MainActivity : AppCompatActivity() {
             else startBubble()
         }
         bubbleCard.addFull(toggleBtn, 10)
+        bubbleCard.addFull(hbox(
+            chip("Đưa bong bóng về màn hình", p) {
+                Prefs.resetBubble()
+                if (BubbleService.running) {
+                    startService(Intent(this, BubbleService::class.java).setAction(BubbleService.ACTION_SHOW))
+                }
+                android.widget.Toast.makeText(this, "Đã đặt lại vị trí bong bóng", android.widget.Toast.LENGTH_SHORT).show()
+            },
+        ), 10)
+
+        val stableCard = card("Chạy ổn định")
+        stableCard.text("Một số máy (nhất là Xiaomi, Redmi, POCO) tự tắt app chạy nền làm bong bóng biến mất. Hãy bật các mục dưới đây.")
+        batteryText = stableCard.text("", p.fg)
+        stableCard.addFull(hbox(chip("Không giới hạn pin", p, filled = true) { openBatterySettings() }), 6)
+        if (isXiaomi()) {
+            stableCard.text("Với Xiaomi: bật \"Tự khởi chạy\", và trong \"Quyền khác\" bật \"Hiển thị cửa sổ bật lên khi chạy trong nền\" cùng \"Hiển thị cửa sổ bật lên\".")
+            stableCard.addFull(hbox(
+                chip("Tự khởi chạy", p) { openXiaomi("com.miui.permcenter.autostart.AutoStartManagementActivity", null) },
+                chip("Quyền khác", p) { openXiaomi("com.miui.permcenter.permissions.PermissionsEditorActivity", "miui.intent.action.APP_PERM_EDITOR") },
+            ), 6)
+        }
 
         val liveCard = card("Dịch trực tiếp", "game")
         liveCard.text("Giữ bong bóng, chọn \"Dịch trực tiếp (game)\" rồi khoanh khung thoại. App tự dịch lại mỗi khi chữ trong khung đổi, bạn vẫn chạm vào game bình thường.")
@@ -387,7 +412,39 @@ class MainActivity : AppCompatActivity() {
         col.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
     }
 
+    private fun isXiaomi(): Boolean {
+        val m = (Build.MANUFACTURER + " " + Build.BRAND).lowercase()
+        return "xiaomi" in m || "redmi" in m || "poco" in m
+    }
+
+    private fun appDetails() = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+
+    private fun tryStart(vararg intents: Intent) {
+        for (i in intents) {
+            try { startActivity(i); return } catch (e: Throwable) { }
+        }
+    }
+
+    private fun openBatterySettings() {
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            tryStart(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), appDetails())
+            return
+        }
+        @SuppressLint("BatteryLife")
+        val req = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        tryStart(req, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), appDetails())
+    }
+
+    private fun openXiaomi(cls: String, action: String?) {
+        val direct = Intent().setClassName("com.miui.securitycenter", cls).putExtra("extra_pkgname", packageName)
+        val byAction = action?.let { Intent(it).putExtra("extra_pkgname", packageName) }
+        tryStart(*listOfNotNull(direct, byAction, appDetails()).toTypedArray())
+    }
+
     private fun refreshStatus() {
+        batteryText?.text = if (getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
+            "Đã cấp: không giới hạn pin" else "Chưa cấp: không giới hạn pin"
         val overlay = Settings.canDrawOverlays(this)
         val notif = Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED

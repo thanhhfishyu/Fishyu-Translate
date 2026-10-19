@@ -39,6 +39,10 @@ class BubbleService : Service() {
     companion object {
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
+        const val ACTION_SHOW = "show"
+        const val EXTRA_THEN = "then"
+        const val THEN_CAPTURE = 1
+        const val THEN_LIVE = 2
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val EXTRA_TOKEN = "token"
@@ -74,12 +78,17 @@ class BubbleService : Service() {
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(WindowManager::class.java)
-        Dictionary.preload(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_SHOW -> {
+                if (!running) { stopSelf(); return START_NOT_STICKY }
+                Prefs.resetBubble()
+                ensureBubbleVisible()
+                return START_NOT_STICKY
+            }
             ACTION_START -> {
                 val token = intent.getLongExtra(EXTRA_TOKEN, 0L)
                 if (token != 0L && token == usedToken) return START_NOT_STICKY
@@ -97,18 +106,22 @@ class BubbleService : Service() {
                 val data: Intent? = if (Build.VERSION.SDK_INT >= 33)
                     intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
                 else intent.getParcelableExtra(EXTRA_DATA)
-                if (data == null) { stopSelf(); return START_NOT_STICKY }
+                if (data == null) {
+                    if (bubble == null) stopSelf()
+                    return START_NOT_STICKY
+                }
                 try {
                     setupProjection(code, data)
                 } catch (e: Throwable) {
                     CrashLog.save(this, e, "setupProjection")
+                    runCatching { capturer?.release() }
                     capturer = null
                     runCatching { projection?.stop() }
                     projection = null
-                    toast("Không lấy được quyền chụp màn hình: ${CrashLog.shortReason(e)}. Bong bóng vẫn dùng được cho \"Dịch chữ đã copy\".")
+                    toast("Không lấy được quyền chụp màn hình: ${CrashLog.shortReason(e)}. Chạm bong bóng để thử cấp lại.")
                 }
                 try {
-                    if (bubble == null) showBubble()
+                    if (bubble == null) showBubble() else ensureBubbleVisible()
                 } catch (e: Throwable) {
                     CrashLog.save(this, e, "showBubble")
                     toast("Không hiện được bong bóng: ${CrashLog.shortReason(e)}")
@@ -116,27 +129,68 @@ class BubbleService : Service() {
                     return START_NOT_STICKY
                 }
                 running = true
+                updateNotification()
+                when (intent.getIntExtra(EXTRA_THEN, 0)) {
+                    THEN_CAPTURE -> bubble?.postDelayed({ startCapture() }, 700)
+                    THEN_LIVE -> bubble?.postDelayed({ startCapture(liveMode = true) }, 700)
+                }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startForegroundCompat() {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE)
+    private fun buildNotification(): Notification {
+        val lost = capturer == null
+        val target = if (lost) Intent(this, ProjectionActivity::class.java) else Intent(this, MainActivity::class.java)
+        val open = PendingIntent.getActivity(this, if (lost) 2 else 0,
+            target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1,
             Intent(this, BubbleService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
-        val n: Notification = NotificationCompat.Builder(this, App.CHANNEL)
+        return NotificationCompat.Builder(this, App.CHANNEL)
             .setSmallIcon(R.drawable.ic_tile)
-            .setContentTitle("Bong bóng dịch đang bật")
-            .setContentText("Chạm bong bóng để dịch, giữ để mở menu")
+            .setContentTitle(if (lost) "Bong bóng dịch: cần cấp lại quyền" else "Bong bóng dịch đang bật")
+            .setContentText(if (lost) "Chạm vào đây để cấp lại quyền chụp màn hình" else "Chạm bong bóng để dịch, giữ để mở menu")
             .setContentIntent(open)
             .addAction(0, "Tắt", stop)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .build()
+    }
+
+    private fun startForegroundCompat() {
+        val n = buildNotification()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else startForeground(1, n)
+    }
+
+    private fun updateNotification() {
+        runCatching {
+            getSystemService(android.app.NotificationManager::class.java).notify(1, buildNotification())
+        }
+    }
+
+    private fun onProjectionLost() {
+        stopLive()
+        removeSelector()
+        runCatching { capturer?.release() }
+        capturer = null
+        projection = null
+        capturing = false
+        bubble?.visibility = View.VISIBLE
+        updateNotification()
+        toast("Quyền chụp màn hình đã bị tắt (do khoá màn hình hoặc dừng chia sẻ). Chạm bong bóng để cấp lại.")
+    }
+
+    private fun requestProjection(then: Int) {
+        try {
+            startActivity(Intent(this, ProjectionActivity::class.java)
+                .putExtra(EXTRA_THEN, then)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Throwable) {
+            CrashLog.save(this, e, "requestProjection")
+        }
+        toast("Cấp lại quyền chụp màn hình để tiếp tục. Nếu không thấy hộp thoại, chạm vào thông báo của app.")
     }
 
     private fun setupProjection(code: Int, data: Intent) {
@@ -146,15 +200,18 @@ class BubbleService : Service() {
         runCatching { projection?.stop() }
         projection = null
         val mpm = getSystemService(MediaProjectionManager::class.java)
-        val mp = mpm.getMediaProjection(code, data) ?: run { stopSelf(); return }
+        val mp = mpm.getMediaProjection(code, data) ?: throw IllegalStateException("Hệ thống không trả về quyền chụp màn hình")
         projection = mp
         capturer = ScreenCapturer(this, mp) {
-            scope.launch { stopSelf() }
+            scope.launch { if (projection === mp) onProjectionLost() }
         }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        removeMenu()
+        placeBubble()
+        bubble?.postDelayed({ placeBubble() }, 400)
         val c = capturer
         val before = c?.let { it.width to it.height }
         c?.onConfigChanged()
@@ -178,23 +235,48 @@ class BubbleService : Service() {
 
     private fun overlayType() = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
+    private fun screenSize(): Pair<Int, Int> {
+        val z = ScreenInfo.get(this)
+        return z.width to z.height
+    }
+
+    private val bubbleSize get() = dp(56)
+
+    private fun placeBubble() {
+        val v = bubble ?: return
+        val lp = bubbleLp ?: return
+        val (sw, sh) = screenSize()
+        val pos = BubblePlacement.toScreen(Prefs.bubbleRight, Prefs.bubbleYFrac, sw, sh, bubbleSize, dp(4), dp(32))
+        lp.x = pos.x; lp.y = pos.y
+        runCatching { wm.updateViewLayout(v, lp) }
+    }
+
+    fun ensureBubbleVisible() {
+        if (bubble == null) {
+            runCatching { showBubble() }.onFailure { CrashLog.save(this, it, "showBubble") }
+        } else {
+            bubble?.visibility = View.VISIBLE
+            placeBubble()
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
-        val p = Palette(this)
-        val size = dp(56)
+        val size = bubbleSize
         val v = ImageView(this).apply {
             setImageResource(R.drawable.bubble_shark)
             alpha = 0.95f
         }
+        val (sw, sh) = screenSize()
+        val start = BubblePlacement.toScreen(Prefs.bubbleRight, Prefs.bubbleYFrac, sw, sh, size, dp(4), dp(32))
         val lp = WindowManager.LayoutParams(
             size, size, overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            val sw = resources.displayMetrics.widthPixels
-            x = if (Prefs.bubbleX < 0) sw - size - dp(4) else Prefs.bubbleX
-            y = Prefs.bubbleY
+            x = start.x
+            y = start.y
         }
 
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0
@@ -211,13 +293,15 @@ class BubbleService : Service() {
                     val dx = e.rawX - downX; val dy = e.rawY - downY
                     if (!moved && hypot(dx, dy) > dp(8)) { moved = true; v.removeCallbacks(longPress) }
                     if (moved) {
-                        lp.x = startX + dx.toInt(); lp.y = startY + dy.toInt()
-                        wm.updateViewLayout(v, lp)
+                        val (w, h) = screenSize()
+                        val c = BubblePlacement.clamp(startX + dx.toInt(), startY + dy.toInt(), w, h, size)
+                        lp.x = c.x; lp.y = c.y
+                        runCatching { wm.updateViewLayout(v, lp) }
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     v.removeCallbacks(longPress)
-                    if (moved) snapToEdge(v, lp)
+                    if (moved) snapToEdge(lp)
                     else if (!longPressed && e.actionMasked == MotionEvent.ACTION_UP) onBubbleTap()
                 }
             }
@@ -227,13 +311,12 @@ class BubbleService : Service() {
         bubble = v; bubbleLp = lp
     }
 
-    private fun snapToEdge(v: View, lp: WindowManager.LayoutParams) {
-        val sw = resources.displayMetrics.widthPixels
-        val sh = resources.displayMetrics.heightPixels
-        lp.x = if (lp.x + v.width / 2 < sw / 2) dp(4) - 0 else sw - v.width - dp(4)
-        lp.y = lp.y.coerceIn(dp(24), sh - v.height - dp(24))
-        wm.updateViewLayout(v, lp)
-        Prefs.bubbleX = lp.x; Prefs.bubbleY = lp.y
+    private fun snapToEdge(lp: WindowManager.LayoutParams) {
+        val (sw, sh) = screenSize()
+        val (right, frac) = BubblePlacement.fromScreen(lp.x, lp.y, sw, sh, bubbleSize, dp(4), dp(32))
+        Prefs.bubbleRight = right
+        Prefs.bubbleYFrac = frac
+        placeBubble()
     }
 
     private fun onBubbleTap() {
@@ -272,28 +355,26 @@ class BubbleService : Service() {
         item("Tắt bong bóng") { stopSelf() }
 
         val blp = bubbleLp ?: return
-        val sw = resources.displayMetrics.widthPixels
         val lp = WindowManager.LayoutParams(
             -2, -2, overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or (if (blp.x > sw / 2) Gravity.END else Gravity.START)
+            gravity = Gravity.TOP or (if (Prefs.bubbleRight) Gravity.END else Gravity.START)
             x = dp(64)
             y = (blp.y - dp(40)).coerceAtLeast(dp(24))
         }
         box.setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) { removeMenu(); true } else false
         }
-        wm.addView(box, lp)
-        menu = box
+        if (runCatching { wm.addView(box, lp) }.isSuccess) menu = box
     }
 
     private fun removeMenu() { removeView(menu); menu = null }
 
     private fun startCapture(liveMode: Boolean = false) {
         val cap = capturer ?: run {
-            toast("Chưa có quyền chụp màn hình. Hãy tắt rồi bật lại bong bóng, hoặc giữ bong bóng để dịch chữ đã copy")
+            requestProjection(if (liveMode) THEN_LIVE else THEN_CAPTURE)
             return
         }
         if (capturing) return
@@ -363,8 +444,14 @@ class BubbleService : Service() {
         val s = LiveSession(this, wm, scope, cap, r,
             obstacles = { listOfNotNull(bubbleRect()) },
             onClose = { stopLive() })
-        live = s
-        s.start()
+        try {
+            s.start()
+            live = s
+        } catch (e: Throwable) {
+            CrashLog.save(this, e, "startLive")
+            runCatching { s.stop() }
+            toast("Không bật được dịch trực tiếp: ${CrashLog.shortReason(e)}")
+        }
         bubble?.visibility = View.VISIBLE
     }
 
@@ -398,6 +485,7 @@ class BubbleService : Service() {
 
     private fun addSelector(view: RegionSelectView) {
         removeSelector()
+        live?.setHidden(true)
         bubble?.visibility = View.INVISIBLE
         val lp = WindowManager.LayoutParams(
             -1, -1, overlayType(),
@@ -410,8 +498,15 @@ class BubbleService : Service() {
                 if (Build.VERSION.SDK_INT >= 30) WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
                 else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        wm.addView(view, lp)
-        selector = view
+        try {
+            wm.addView(view, lp)
+            selector = view
+        } catch (e: Throwable) {
+            CrashLog.save(this, e, "addSelector")
+            live?.setHidden(false)
+            bubble?.visibility = View.VISIBLE
+            toast("Không mở được lớp khoanh vùng: ${CrashLog.shortReason(e)}")
+        }
     }
 
     private fun removeSelector() {
@@ -482,8 +577,7 @@ class BubbleService : Service() {
     @SuppressLint("ClickableViewAccessibility")
     private fun showPanel(anchor: Rect?): ResultCard {
         removePanel()
-        val sw = resources.displayMetrics.widthPixels
-        val sh = resources.displayMetrics.heightPixels
+        val (sw, sh) = screenSize()
         val c = ResultCard(this, scope, (sh * 0.42).toInt()) { removePanel() }
         val frame = object : FrameLayout(this) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -510,14 +604,20 @@ class BubbleService : Service() {
                 MotionEvent.ACTION_DOWN -> { downY = e.rawY; startY = lp.y }
                 MotionEvent.ACTION_MOVE -> {
                     val dy = (e.rawY - downY).toInt()
-                    lp.y = (startY + if (lp.gravity and Gravity.TOP == Gravity.TOP) dy else -dy).coerceAtLeast(0)
-                    wm.updateViewLayout(frame, lp)
+                    lp.y = (startY + if (lp.gravity and Gravity.TOP == Gravity.TOP) dy else -dy)
+                        .coerceIn(0, (screenSize().second - frame.height).coerceAtLeast(0))
+                    runCatching { wm.updateViewLayout(frame, lp) }
                 }
             }
             true
         }
-        wm.addView(frame, lp)
-        panel = frame; card = c
+        try {
+            wm.addView(frame, lp)
+            panel = frame; card = c
+        } catch (e: Throwable) {
+            CrashLog.save(this, e, "showPanel")
+            toast("Không mở được cửa sổ dịch: ${CrashLog.shortReason(e)}")
+        }
         bubble?.visibility = View.VISIBLE
         return c
     }

@@ -10,12 +10,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.cancel
 
 class TranslateActivity : AppCompatActivity() {
     companion object { const val EXTRA_CLIPBOARD = "clipboard" }
 
-    private val scope = MainScope()
+    private val scope = MainScope() + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+        CrashLog.save(App.instance, e, "TranslateActivity")
+    }
     private lateinit var card: ResultCard
     private var pendingClipboard = false
 
