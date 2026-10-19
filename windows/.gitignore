@@ -1,0 +1,11 @@
+assets/cedict.dat
+assets/hanviet.dat
+assets/ocr_*.png
+build/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+fishyu/_version.py
+version_info.txt
+out/

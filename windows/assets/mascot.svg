@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 170" width="400" height="340">
+<g stroke="#2B3442" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round">
+<path d="M96,40 C100,22 108,12 124,8 C120,20 120,32 124,42 Z" fill="#8FB4E6"/>
+<path d="M38,124 C36,72 66,40 104,40 C146,40 170,74 168,124 Z" fill="#A9C6EE"/>
+<path d="M56,124 C62,100 82,94 104,94 C126,94 146,100 152,124 Z" fill="#FFFFFF" stroke="none"/>
+<path d="M60,112 C78,98 130,98 148,112" fill="none" stroke-width="3"/>
+<path d="M30,120 L100,130 L100,162 L30,152 Z" fill="#FFFFFF"/>
+<path d="M100,130 L172,120 L172,152 L100,162 Z" fill="#FFFFFF"/>
+<path d="M42,132 L86,138 M42,141 L80,146 M114,138 L160,132 M120,146 L160,141" fill="none" stroke-width="3" stroke="#8FB4E6"/>
+<path d="M36,118 C30,108 40,100 50,106 C56,110 56,120 50,124 Z" fill="#A9C6EE"/>
+<path d="M164,118 C170,108 160,100 150,106 C144,110 144,120 150,124 Z" fill="#A9C6EE"/>
+</g>
+<path d="M78,74 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 Z M118,74 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 Z" fill="#2B3442"/>
+<path d="M82,72 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z M122,72 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" fill="#FFFFFF"/>
+<path d="M62,86 a9,6 0 1,0 18,0 a9,6 0 1,0 -18,0 Z M128,86 a9,6 0 1,0 18,0 a9,6 0 1,0 -18,0 Z" fill="#F4B6B6"/>
+<path d="M96,84 Q104,92 112,84" fill="none" stroke="#2B3442" stroke-width="3.5" stroke-linecap="round"/>
+</svg>

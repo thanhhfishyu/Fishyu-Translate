@@ -1,0 +1,128 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'windows/**'
+      - 'app/src/main/assets/**'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check offline models release
+        id: check
+        run: |
+          if gh release view models-v1 --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.exists == 'false'
+        with:
+          python-version: '3.12'
+
+      - name: Convert Opus-MT models
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install ctranslate2==4.8.3 sentencepiece transformers sacremoses
+          mkdir -p out
+          for l in zh ja; do
+            ct2-transformers-converter --model Helsinki-NLP/opus-mt-$l-vi --output_dir opus-$l-vi --quantization int8 --force
+            for f in source.spm target.spm; do
+              curl -sSfL -o opus-$l-vi/$f https://huggingface.co/Helsinki-NLP/opus-mt-$l-vi/resolve/main/$f
+            done
+            (cd opus-$l-vi && zip -9 ../out/opus-$l-vi.zip model.bin config.json shared_vocabulary.json source.spm target.spm)
+          done
+          ls -la out
+
+      - name: Publish models release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: models-v1
+          name: Gói dịch offline (Fishyu Translate for Windows)
+          body: "Mô hình dịch offline Trung - Việt và Nhật - Việt (Opus-MT, Helsinki-NLP, CC-BY 4.0). App tự tải khi cần, không cần tải tay."
+          files: out/*.zip
+          make_latest: false
+
+  windows:
+    needs: models
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: windows/requirements.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller==6.22.3 pytest pillow
+
+      - name: Prepare
+        shell: bash
+        run: |
+          cp ../app/src/main/assets/cedict.dat ../app/src/main/assets/hanviet.dat assets/
+          python make_version.py "1.0.${{ github.run_number }}"
+
+      - name: Unit tests
+        run: python -m pytest -q tests
+
+      - name: Build exe
+        run: pyinstaller --noconfirm --clean FishyuTranslate.spec
+
+      - name: Self-test built exe on Windows
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\FishyuTranslate\FishyuTranslate.exe" `
+               -ArgumentList "--selftest","--offline","--out","$PWD\selftest.json" -PassThru
+          if (-not $p.WaitForExit(600000)) { $p.Kill(); throw "selftest timeout" }
+          Get-Content selftest.json -Encoding utf8
+          $r = Get-Content selftest.json -Encoding utf8 | ConvertFrom-Json
+          if (-not $r.ok) { throw "selftest failed" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=1.0.${{ github.run_number }}" installer.iss
+          Compress-Archive -Path "dist\FishyuTranslate" -DestinationPath "out\FishyuTranslate-for-Windows-Portable-v1.0.${{ github.run_number }}.zip"
+          Get-ChildItem out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FishyuTranslate-for-Windows
+          path: |
+            windows/out/*
+            windows/selftest.json
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: win-v1.0.${{ github.run_number }}
+          name: Fishyu Translate for Windows v1.0.${{ github.run_number }}
+          body: |
+            Bản cho máy tính Windows 10/11 (64-bit).
+            - FishyuTranslate-for-Windows-Setup: bộ cài, chạy file này để cài.
+            - FishyuTranslate-for-Windows-Portable: bản không cần cài, giải nén rồi chạy FishyuTranslate.exe.
+          files: windows/out/*
