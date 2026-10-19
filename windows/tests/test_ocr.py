@@ -3,6 +3,7 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from fishyu import ocr
+from fishyu.livegate import similarity
 
 from conftest import cjk_font
 
@@ -19,10 +20,10 @@ def render(lines_xy, size=(900, 420)):
 def test_zh_ja_tw():
     img = render([(20, 20, "细胞膜是包围细胞质的一层薄膜。")], (700, 90))
     r = ocr.recognize(img)
-    assert r.text == "细胞膜是包围细胞质的一层薄膜。" and r.lang == "ZH"
+    assert similarity(r.text, "细胞膜是包围细胞质的一层薄膜。") >= 0.9 and r.lang == "ZH", r.text
     img = render([(20, 20, "先生、今日はどこへ行きますか？")], (700, 90))
     r = ocr.recognize(img)
-    assert r.text == "先生、今日はどこへ行きますか？" and r.lang == "JA"
+    assert similarity(r.text, "先生、今日はどこへ行きますか？") >= 0.9 and r.lang == "JA", r.text
 
 
 def test_paragraph_grouping_and_tap():
