@@ -108,6 +108,7 @@ class BubbleService : Service() {
     }
 
     private fun setupProjection(code: Int, data: Intent) {
+        stopLive()
         capturer?.release()
         projection?.stop()
         val mpm = getSystemService(MediaProjectionManager::class.java)
@@ -261,13 +262,15 @@ class BubbleService : Service() {
         if (capturing) return
         capturing = true
         removePanel()
+        live?.setHidden(true)
         bubble?.visibility = View.INVISIBLE
         scope.launch {
             val shot = try { cap.capture() } catch (e: Exception) { null }
             capturing = false
             if (shot == null) {
                 bubble?.visibility = View.VISIBLE
-                toast("Chưa chụp được màn hình, thử lại")
+                live?.setHidden(false)
+                toast("Chưa chụp được màn hình. Nếu vẫn lỗi, hãy tắt rồi bật lại bong bóng và chọn \"Toàn bộ màn hình\"")
                 return@launch
             }
             if (liveMode) showLiveSelector(shot) else showSelector(shot)
@@ -371,6 +374,7 @@ class BubbleService : Service() {
 
     private fun removeSelector() {
         removeView(selector); selector = null
+        live?.setHidden(false)
         if (panel == null) bubble?.visibility = View.VISIBLE
     }
 

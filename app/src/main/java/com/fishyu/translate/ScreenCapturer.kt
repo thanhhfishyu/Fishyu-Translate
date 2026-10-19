@@ -25,15 +25,23 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
     @Volatile private var latest: Image? = null
     @Volatile private var frameCounter = 0L
     private val lock = Any()
+    @Volatile private var released = false
+    private var displayW = 0
+    private var displayH = 0
     var width = 0; private set
     var height = 0; private set
 
     init {
         projection.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { release(); onStopped() }
+            override fun onStop() {
+                val wasOurs = released
+                release()
+                if (!wasOurs) onStopped()
+            }
         }, handler)
         val (w, h, dpi) = metrics()
         width = w; height = h
+        displayW = w; displayH = h
         val r = newReader(w, h)
         reader = r
         display = projection.createVirtualDisplay(
@@ -48,6 +56,7 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
             setOnImageAvailableListener({ rd ->
                 val img = try { rd.acquireLatestImage() } catch (e: Exception) { null } ?: return@setOnImageAvailableListener
                 synchronized(lock) {
+                    if (rd !== reader) { img.close(); return@setOnImageAvailableListener }
                     latest?.close()
                     latest = img
                     frameCounter++
@@ -71,22 +80,36 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
     fun onConfigChanged() {
         val (w, h, dpi) = metrics()
         if (w == width && h == height) return
-        width = w; height = h
+        swapSurface(w, h, dpi)
+    }
+
+    private fun swapSurface(w: Int, h: Int, dpi: Int) {
+        if (released) return
         val old = reader
         val r = newReader(w, h)
-        reader = r
-        display?.resize(w, h, dpi)
+        synchronized(lock) {
+            latest?.close(); latest = null
+            width = w; height = h
+            reader = r
+        }
+        if (w != displayW || h != displayH) {
+            display?.resize(w, h, dpi)
+            displayW = w; displayH = h
+        }
         display?.surface = r.surface
-        synchronized(lock) { latest?.close(); latest = null }
-        handler.post { old?.close() }
+        handler.postDelayed({ runCatching { old?.close() } }, 300)
     }
 
     suspend fun capture(): Bitmap? {
-        val start = frameCounter
-        delay(120)
+        delay(150)
+        val (w, h, dpi) = metrics()
+        swapSurface(w, h, dpi)
         var waited = 0
-        while (frameCounter == start && waited < 480) { delay(40); waited += 40 }
-        return synchronized(lock) { latest?.let { toBitmap(it) } }
+        while (waited < 1500) {
+            synchronized(lock) { latest?.let { return toBitmap(it) } }
+            delay(30); waited += 30
+        }
+        return null
     }
 
     val frames: Long get() = frameCounter
@@ -126,6 +149,8 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
     }
 
     fun release() {
+        if (released && display == null) return
+        released = true
         synchronized(lock) { latest?.close(); latest = null }
         runCatching { display?.release() }
         runCatching { reader?.close() }

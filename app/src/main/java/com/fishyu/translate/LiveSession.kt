@@ -46,11 +46,14 @@ class LiveSession(
     private lateinit var source: TextView
     private var job: Job? = null
     private var paused = false
-    private var lastSig: IntArray? = null
-    private var pendingSig: IntArray? = null
-    private var lastText = ""
+    private var lastOcrSig: IntArray? = null
+    private var lastOcrAt = 0L
+    private var pendingNorm = ""
+    private var shownNorm = ""
+    private var emptyStreak = 0
+    private var sentChars = 0
     private val history = ArrayDeque<String>()
-    private var lastFrames = -1L
+    private val done = LinkedHashMap<String, String>()
 
     fun start() {
         showFrame()
@@ -63,6 +66,16 @@ class LiveSession(
         runCatching { frame?.let { wm.removeView(it) } }
         runCatching { box?.let { wm.removeView(it) } }
         frame = null; box = null
+    }
+
+    private var hidden = false
+
+    fun setHidden(h: Boolean) {
+        hidden = h
+        val v = if (h) View.INVISIBLE else View.VISIBLE
+        frame?.visibility = v
+        box?.visibility = v
+        if (!h) lastOcrAt = System.currentTimeMillis() + 400
     }
 
     fun boxRect(): Rect? {
@@ -119,7 +132,9 @@ class LiveSession(
         engineChip = ctx.chip(engineLabel(), p) {
             Prefs.liveEngine = if (Prefs.liveEngine == Engine.DEEPL) Engine.OFFLINE else Engine.DEEPL
             engineChip.text = engineLabel()
-            lastText = ""
+            done.clear()
+            shownNorm = ""
+            lastOcrSig = null
         }
         val smaller = ctx.chip("A-", p) { Prefs.liveFontSp = Prefs.liveFontSp - 2; applyFont() }
         val bigger = ctx.chip("A+", p) { Prefs.liveFontSp = Prefs.liveFontSp + 2; applyFont() }
@@ -133,7 +148,7 @@ class LiveSession(
             setPadding(0, ctx.dp(6), 0, 0)
         }
         b.addView(source)
-        translation = ctx.label("Chờ chữ trong vùng thay đổi...", Prefs.liveFontSp.toFloat(), p.fg).apply {
+        translation = ctx.label("Đang đọc chữ trong vùng...", Prefs.liveFontSp.toFloat(), p.fg).apply {
             setLineSpacing(0f, 1.2f)
             setPadding(0, ctx.dp(6), 0, 0)
             setOnClickListener {
@@ -193,30 +208,27 @@ class LiveSession(
         paused = !paused
         pauseChip.text = if (paused) "Tiếp" else "Dừng"
         status.text = if (paused) "Đã dừng" else "Đang theo dõi"
-        if (!paused) { lastSig = null; pendingSig = null; lastText = "" }
+        if (!paused) { lastOcrSig = null; pendingNorm = ""; shownNorm = "" }
     }
 
     private fun loop() {
         job = scope.launch {
+            status.text = "Đang đọc chữ..."
             while (isActive) {
-                delay(450)
-                if (paused) continue
-                val f = capturer.frames
-                if (f == lastFrames) continue
-                lastFrames = f
+                if (paused || hidden) { delay(400); continue }
                 val obs = obstacles() + listOfNotNull(boxRect())
-                val bmp = withContext(Dispatchers.Default) { capturer.grabRegion(region)?.also { mask(it, obs) } } ?: continue
+                val bmp = withContext(Dispatchers.Default) { capturer.grabRegion(region)?.also { mask(it, obs) } }
+                if (bmp == null) { delay(400); continue }
                 val sig = withContext(Dispatchers.Default) { signature(bmp) }
-                val prev = lastSig
-                if (prev != null && diff(prev, sig) < 4) { pendingSig = null; continue }
-                val pend = pendingSig
-                if (pend == null || diff(pend, sig) >= 3) {
-                    pendingSig = sig
-                    continue
+                val prev = lastOcrSig
+                val changed = prev == null || diff(prev, sig) >= 3
+                val now = System.currentTimeMillis()
+                if ((changed || pendingNorm.isNotEmpty()) && now - lastOcrAt >= 650) {
+                    lastOcrSig = sig
+                    lastOcrAt = now
+                    process(bmp)
                 }
-                lastSig = sig
-                pendingSig = null
-                process(bmp)
+                delay(350)
             }
         }
     }
@@ -233,27 +245,79 @@ class LiveSession(
     }
 
     private suspend fun process(bmp: Bitmap) {
-        val ocr = try { OcrEngine.recognize(bmp) } catch (e: Exception) { return }
+        val ocr = try { OcrEngine.recognize(bmp) } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return
+        }
         val text = ocr.text.replace("\n", "").trim()
-        if (text.length < 2) return
-        if (similar(text, lastText)) return
-        lastText = text
+        val norm = normalize(text)
+        if (norm.length < 2) {
+            pendingNorm = ""
+            if (++emptyStreak == 3 && shownNorm.isEmpty()) status.text = "Chưa thấy chữ trong vùng đã chọn"
+            return
+        }
+        emptyStreak = 0
+        if (similarity(norm, shownNorm) >= 0.8) { pendingNorm = ""; return }
+        if (similarity(norm, pendingNorm) < 0.9) {
+            pendingNorm = norm
+            return
+        }
+        pendingNorm = ""
+        shownNorm = norm
         source.text = text
+
+        val reuse = done.entries.firstOrNull { similarity(it.key, norm) >= 0.85 }?.value
+        if (reuse != null) {
+            translation.text = reuse
+            translation.post { fitBox() }
+            return
+        }
+
         status.text = "Đang dịch..."
         translation.alpha = 0.55f
         try {
             val ctxText = history.joinToString("\n").ifBlank { null }
             val r = Translator.translate(text, ocr.lang, ctxText, Prefs.liveEngine)
             translation.text = r.text
-            status.text = if (r.note != null) "Offline (DeepL lỗi)" else "Đang theo dõi"
+            if (r.engine == "DeepL") sentChars += text.length
+            done[norm] = r.text
+            if (done.size > 40) done.remove(done.keys.first())
+            status.text = when {
+                r.note != null -> "Đang dịch offline (DeepL lỗi)"
+                Prefs.liveEngine == Engine.DEEPL -> "Đang theo dõi - đã gửi DeepL khoảng $sentChars ký tự"
+                else -> "Đang theo dõi"
+            }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            status.text = "Lỗi: ${e.message?.take(40)}"
+            status.text = "Lỗi: ${e.message?.take(60)}"
+            shownNorm = ""
         }
         translation.alpha = 1f
         history.addLast(text)
         while (history.size > 3) history.removeFirst()
         translation.post { fitBox() }
+    }
+
+    private fun normalize(s: String): String = buildString {
+        for (c in s) if (Character.isLetterOrDigit(c)) append(c)
+    }
+
+    private fun similarity(a: String, b: String): Double {
+        if (a == b) return 1.0
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val n = a.length
+        val m = b.length
+        var prev = IntArray(m + 1) { it }
+        var cur = IntArray(m + 1)
+        for (i in 1..n) {
+            cur[0] = i
+            for (j in 1..m) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            }
+            val t = prev; prev = cur; cur = t
+        }
+        return 1.0 - prev[m].toDouble() / maxOf(n, m)
     }
 
     private fun signature(b: Bitmap): IntArray {
@@ -273,15 +337,5 @@ class LiveSession(
         var sum = 0L
         for (i in a.indices) sum += abs(a[i] - b[i])
         return (sum / a.size).toInt()
-    }
-
-    private fun similar(a: String, b: String): Boolean {
-        if (a == b) return true
-        if (b.isEmpty()) return false
-        val n = maxOf(a.length, b.length)
-        var same = 0
-        val m = minOf(a.length, b.length)
-        for (i in 0 until m) if (a[i] == b[i]) same++
-        return same * 100 / n >= 92
     }
 }

@@ -153,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         })
 
     private fun build() {
+        buildCoffee()
         buildHero()
 
         val bubbleCard = card("Bong bóng dịch")
@@ -255,6 +256,78 @@ class MainActivity : AppCompatActivity() {
             addView(num, LinearLayout.LayoutParams(dp(24), dp(24)).apply { topMargin = dp(1) })
             addView(t, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
         }
+    }
+
+    private fun buildCoffee() {
+        val cup = ImageView(this).apply { setImageResource(R.drawable.ic_coffee) }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label("Buy me a coffee", 17f, p.fg, bold = true))
+            addView(label("Thấy app hữu ích thì ủng hộ mình một ly cà phê qua MoMo nhé", 13f, p.muted))
+        }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = doodle(p, p.bg, dpf(18f), dp(3))
+            setPadding(dp(10), dp(8), dp(16), dp(11))
+            isClickable = true
+            setOnClickListener { showCoffee() }
+            addView(cup, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(texts, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
+            addView(chip("Ủng hộ", p, filled = true) { showCoffee() })
+        }
+        col.addView(bar, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+    }
+
+    private fun showCoffee() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(20), dp(18), dp(20), dp(8))
+        }
+        box.addView(label("Cảm ơn bạn đã ủng hộ!", 18f, p.fg, bold = true).apply { gravity = Gravity.CENTER })
+        box.addView(label("Quét mã bằng MoMo hoặc app ngân hàng. Nếu đang dùng chính điện thoại này, bấm \"Lưu mã QR\" rồi mở MoMo, chọn quét mã từ ảnh.",
+            13f, p.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(10)) })
+        box.addView(ImageView(this).apply {
+            setImageResource(R.drawable.momo_qr)
+            adjustViewBounds = true
+        }, LinearLayout.LayoutParams(dp(260), -2))
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Lưu mã QR") { _, _ -> saveQr() }
+            .setNeutralButton("Mở MoMo") { _, _ -> openMomo() }
+            .setNegativeButton("Đóng", null)
+            .create()
+        dialog.show()
+    }
+
+    private fun saveQr() {
+        if (Build.VERSION.SDK_INT < 29) {
+            android.widget.Toast.makeText(this, "Máy này chưa hỗ trợ lưu tự động, hãy chụp màn hình mã QR", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "fishyu_momo_qr.jpg")
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Fishyu")
+            }
+            val uri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException()
+            val bmp = android.graphics.BitmapFactory.decodeResource(resources, R.drawable.momo_qr)
+            contentResolver.openOutputStream(uri).use { out ->
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out!!)
+            }
+            android.widget.Toast.makeText(this, "Đã lưu vào Ảnh > Pictures/Fishyu", android.widget.Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this, "Không lưu được ảnh", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openMomo() {
+        val i = packageManager.getLaunchIntentForPackage("com.mservice.momotransfer")
+        if (i != null) startActivity(i)
+        else startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.mservice.momotransfer")))
     }
 
     private fun buildHero() {
