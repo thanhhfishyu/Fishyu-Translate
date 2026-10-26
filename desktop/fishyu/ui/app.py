@@ -5,7 +5,7 @@ from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .. import config, crashlog, ocr, sysapi
+from .. import APP_NAME, config, crashlog, ocr, sysapi
 from ..hotkeys import HotkeyManager
 from . import theme
 from .bubble import Bubble
@@ -25,17 +25,21 @@ COMMANDS = ("show", "capture", "live", "clipboard", "quit")
 def already_running(command: str = "show") -> bool:
     s = QLocalSocket()
     s.connectToServer(SERVER_NAME)
-    if s.waitForConnected(400):
-        s.write(command.encode("ascii"))
-        s.flush()
-        s.waitForBytesWritten(400)
-        s.disconnectFromServer()
-        return True
-    return False
+    if not s.waitForConnected(1000):
+        return False
+    s.write((command + "\n").encode("ascii"))
+    s.flush()
+    end = time.monotonic() + 5
+    while s.bytesToWrite() > 0 and time.monotonic() < end:
+        s.waitForBytesWritten(250)
+    s.waitForReadyRead(3000)
+    s.disconnectFromServer()
+    if s.state() != QLocalSocket.UnconnectedState:
+        s.waitForDisconnected(1000)
+    return True
 
 
 def read_selected_text() -> str:
-    """Chữ đang bôi đen (Linux) hoặc chữ đã copy."""
     import shutil
     import subprocess
     cb = QGuiApplication.clipboard()
@@ -82,7 +86,7 @@ class Controller(QObject):
         self.tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(theme.app_icon(), self)
-            self.tray.setToolTip("Fishyu Translate for Windows")
+            self.tray.setToolTip(APP_NAME)
             self.tray_menu = QMenu()
             self._fill_menu(self.tray_menu)
             self.tray.setContextMenu(self.tray_menu)
@@ -115,9 +119,34 @@ class Controller(QObject):
                                   QSystemTrayIcon.Information, 3000)
 
     def _on_instance(self):
-        c = self.server.nextPendingConnection()
-        if c:
-            c.readyRead.connect(lambda: self.run_command(bytes(c.readAll()).decode("ascii", "ignore").strip()))
+        while self.server.hasPendingConnections():
+            c = self.server.nextPendingConnection()
+            if c:
+                self._serve_instance(c)
+
+    def _serve_instance(self, c):
+        buf = bytearray()
+        done = [False]
+
+        def read():
+            if done[0]:
+                return
+            buf.extend(bytes(c.readAll()))
+            if b"\n" in buf or c.state() != QLocalSocket.ConnectedState:
+                done[0] = True
+                cmd = bytes(buf).decode("ascii", "ignore").strip()
+                if c.state() == QLocalSocket.ConnectedState:
+                    c.write(b"ok\n")
+                    c.flush()
+                c.disconnectFromServer()
+                if cmd:
+                    QTimer.singleShot(0, lambda: self.run_command(cmd))
+
+        c.readyRead.connect(read)
+        c.disconnected.connect(read)
+        c.disconnected.connect(c.deleteLater)
+        if c.bytesAvailable():
+            read()
 
     def run_command(self, cmd: str):
         cmd = (cmd or "show").split()[0] if cmd else "show"

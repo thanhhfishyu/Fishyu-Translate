@@ -209,8 +209,15 @@ def run() -> int:
         try:
             pump(1.0)
             exe = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, sys.argv[0]]
-            r = subprocess.run(exe + ["--capture"], timeout=60)
-            assert r.returncode == 0, f"lệnh --capture thoát với mã {r.returncode}"
+
+            def send(cmd):
+                p = subprocess.Popen(exe + [cmd])
+                if not pump(60, lambda: p.poll() is not None):
+                    p.kill()
+                    raise AssertionError(f"lệnh {cmd} không thoát")
+                assert p.returncode == 0, f"lệnh {cmd} thoát với mã {p.returncode}"
+
+            send("--capture")
             assert pump(20, lambda: bool(ctl.selectors)), "lệnh --capture không mở khung khoanh vùng"
             ctl.cancel_selection()
             pump(0.5)
@@ -220,8 +227,7 @@ def run() -> int:
             try:
                 QGuiApplication.clipboard().setText("我们走吧")
                 pump(0.3)
-                r = subprocess.run(exe + ["--clipboard"], timeout=60)
-                assert r.returncode == 0
+                send("--clipboard")
                 assert pump(20, lambda: ctl.panels and "[vi]" in ctl.panels[0].translation.text()), \
                     "lệnh --clipboard không mở cửa sổ dịch"
             finally:

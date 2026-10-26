@@ -32,7 +32,6 @@ _X11_NAMES = {
 
 
 def parse_x11(seq: str):
-    """Trả về (modmask, keysym_name) cho X11."""
     if not seq or not seq.strip():
         return None
     from Xlib import X

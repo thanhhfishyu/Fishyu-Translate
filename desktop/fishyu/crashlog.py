@@ -4,7 +4,7 @@ import sys
 import threading
 import traceback
 
-from . import VERSION
+from . import APP_NAME, VERSION
 from .paths import data_dir
 
 
@@ -15,7 +15,7 @@ def _file():
 def save(exc: BaseException, where: str) -> None:
     try:
         text = (
-            f"Fishyu Translate for Windows {VERSION}\n"
+            f"{APP_NAME} {VERSION}\n"
             f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n"
             f"{platform.platform()} - Python {platform.python_version()}\n"
             f"Vị trí: {where}\n\n"
