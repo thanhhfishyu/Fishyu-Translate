@@ -1,11 +1,5 @@
 # Fishyu Translate
 
-<p align="center">
-  <b>Buy me a coffee</b><br>
-  Thấy app hữu ích thì ủng hộ mình một ly cà phê qua MoMo nhé<br><br>
-  <img src="docs/momo.jpg" width="240" alt="MoMo QR">
-</p>
-
 App dịch chữ tiếng Trung và tiếng Nhật trên màn hình sang tiếng Việt, dùng DeepL. Có bản Android và bản Windows.
 <Tui làm app này theo order của anh rể tui, mọi người có thể tham khảo và sử dụng>
 
