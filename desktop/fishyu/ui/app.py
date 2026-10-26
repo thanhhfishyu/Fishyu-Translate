@@ -5,7 +5,7 @@ from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .. import config, crashlog, ocr, winapi
+from .. import config, crashlog, ocr, sysapi
 from ..hotkeys import HotkeyManager
 from . import theme
 from .bubble import Bubble
@@ -19,16 +19,42 @@ from .tasks import run_async
 SERVER_NAME = "FishyuTranslateForWindows"
 
 
-def already_running() -> bool:
+COMMANDS = ("show", "capture", "live", "clipboard", "quit")
+
+
+def already_running(command: str = "show") -> bool:
     s = QLocalSocket()
     s.connectToServer(SERVER_NAME)
     if s.waitForConnected(400):
-        s.write(b"show")
+        s.write(command.encode("ascii"))
         s.flush()
         s.waitForBytesWritten(400)
         s.disconnectFromServer()
         return True
     return False
+
+
+def read_selected_text() -> str:
+    """Chữ đang bôi đen (Linux) hoặc chữ đã copy."""
+    import shutil
+    import subprocess
+    cb = QGuiApplication.clipboard()
+    candidates = []
+    if sysapi.IS_LINUX:
+        if sysapi.is_wayland() and shutil.which("wl-paste"):
+            for args in (["wl-paste", "-p", "-n"], ["wl-paste", "-n"]):
+                try:
+                    out = subprocess.run(args, capture_output=True, timeout=1.5)
+                    candidates.append(out.stdout.decode("utf-8", "ignore"))
+                except Exception:
+                    pass
+        if cb.supportsSelection():
+            candidates.append(cb.text(cb.Mode.Selection))
+    candidates.append(cb.text())
+    for t in candidates:
+        if t and t.strip():
+            return t.strip()
+    return ""
 
 
 class Controller(QObject):
@@ -75,7 +101,7 @@ class Controller(QObject):
         QGuiApplication.clipboard().dataChanged.connect(self._on_clipboard)
 
         self.set_bubble_visible(config.get().bubble_visible)
-        if not start_hidden or not self.tray:
+        if not start_hidden or (not self.tray and not config.get().bubble_visible):
             self.show_settings()
         QTimer.singleShot(1500, lambda: run_async(ocr.warmup, lambda *_: None, "ocr-warmup"))
 
@@ -91,7 +117,23 @@ class Controller(QObject):
     def _on_instance(self):
         c = self.server.nextPendingConnection()
         if c:
-            c.readyRead.connect(lambda: (c.readAll(), self.show_settings()))
+            c.readyRead.connect(lambda: self.run_command(bytes(c.readAll()).decode("ascii", "ignore").strip()))
+
+    def run_command(self, cmd: str):
+        cmd = (cmd or "show").split()[0] if cmd else "show"
+        if cmd == "capture":
+            self.start_capture(False)
+        elif cmd == "live":
+            if self.live:
+                self.stop_live()
+            else:
+                self.start_capture(True)
+        elif cmd == "clipboard":
+            self.translate_clipboard()
+        elif cmd == "quit":
+            self.quit()
+        else:
+            self.show_settings()
 
     def _tray_activated(self, reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
@@ -156,8 +198,10 @@ class Controller(QObject):
 
     def apply_hotkeys(self):
         st = config.get()
-        self.hotkeys.start({"capture": st.hotkey_capture, "live": st.hotkey_live, "clipboard": st.hotkey_clipboard})
-        self.settings.update_hotkey_warning(self.hotkeys.failed)
+        self.hotkeys.start({"capture": st.hotkey_capture, "live": st.hotkey_live, "clipboard": st.hotkey_clipboard},
+                           {"capture": "Khoanh vùng để dịch", "live": "Dịch trực tiếp (game)",
+                            "clipboard": "Dịch chữ đang bôi đen / đã copy"})
+        self.settings.update_hotkey_warning(self.hotkeys.failed, self.hotkeys.backend, self.hotkeys.note)
 
     def _on_hotkey(self, name):
         if name == "capture":
@@ -180,7 +224,7 @@ class Controller(QObject):
             self.open_panel(text.strip(), anchor=QRect(pos.x() - 40, pos.y() - 10, 80, 20))
 
     def translate_clipboard(self):
-        text = QGuiApplication.clipboard().text().strip()
+        text = read_selected_text()
         if not text:
             if self.tray:
                 self.tray.showMessage("Fishyu Translate", "Bộ nhớ tạm đang trống. Hãy bôi đen chữ và bấm Ctrl+C trước.",
@@ -214,7 +258,7 @@ class Controller(QObject):
         self._op += 1
         self._capturing = True
         try:
-            self.prev_fg = winapi.foreground()
+            self.prev_fg = sysapi.foreground()
             self.close_panels()
             if self.live:
                 self.live.set_hidden(True)
@@ -263,7 +307,7 @@ class Controller(QObject):
         if self.live:
             self.live.set_hidden(False)
         if restore_focus:
-            QTimer.singleShot(50, lambda h=self.prev_fg: winapi.restore_foreground(h))
+            QTimer.singleShot(50, lambda h=self.prev_fg: sysapi.restore_foreground(h))
 
     @staticmethod
     def _to_global(sel: RegionSelector, local: QRect) -> QRect:

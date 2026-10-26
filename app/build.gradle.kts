@@ -48,6 +48,32 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
+abstract class LicenseAssets : DefaultTask() {
+    @get:InputFiles
+    abstract val sources: ConfigurableFileCollection
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun run() {
+        val dir = outputDir.get().asFile.resolve("licenses")
+        dir.deleteRecursively()
+        dir.mkdirs()
+        sources.files.forEach { it.copyTo(dir.resolve(it.name), overwrite = true) }
+    }
+}
+
+val licenseAssets = tasks.register<LicenseAssets>("licenseAssets") {
+    sources.from(rootProject.file("LICENSE"), rootProject.file("THIRD_PARTY_NOTICES.md"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(licenseAssets, LicenseAssets::outputDir)
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

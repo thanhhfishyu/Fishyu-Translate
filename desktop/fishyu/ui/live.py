@@ -16,6 +16,12 @@ from .tasks import run_async
 class LiveFrame(OverlayWindow):
     click_through = True
     no_mask = True
+    mask_shape = "ring"
+
+    def shape_region(self):
+        from PySide6.QtGui import QRegion
+        r = self.rect()
+        return QRegion(r).subtracted(QRegion(r.adjusted(4, 4, -4, -4)))
 
     def __init__(self, region: QRect):
         super().__init__(pinned=True)

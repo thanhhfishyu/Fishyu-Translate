@@ -6,8 +6,9 @@ on:
     paths-ignore:
       - 'README.md'
       - 'docs/**'
-      - 'windows/**'
+      - 'desktop/**'
       - '.github/workflows/build-windows.yml'
+      - '.github/workflows/build-linux.yml'
   workflow_dispatch:
 
 permissions:

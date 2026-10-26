@@ -9,3 +9,4 @@ __pycache__/
 fishyu/_version.py
 version_info.txt
 out/
+assets/cjk/

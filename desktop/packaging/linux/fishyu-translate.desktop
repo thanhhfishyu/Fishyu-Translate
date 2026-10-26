@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fishyu Translate
+GenericName=Dịch màn hình
+Comment=Dịch chữ tiếng Trung, tiếng Nhật trên màn hình sang tiếng Việt
+Exec=fishyu-translate %U
+Icon=fishyu-translate
+Terminal=false
+Categories=Utility;Education;
+Keywords=translate;OCR;Chinese;Japanese;Vietnamese;dịch;
+StartupNotify=false

@@ -35,14 +35,17 @@ def run() -> int:
     from PySide6.QtWidgets import QApplication, QLabel
 
     app = QApplication(sys.argv)
-    from . import VERSION, ocr, translator, winapi
+    from . import VERSION, ocr, sysapi, translator
     from .dictionary import DICT
-    from .paths import resource
+    from .paths import license_file, resource
     from .ui import theme
 
     theme.load_fonts()
     theme.apply_app_font(app)
     app.setStyleSheet(theme.STYLE)
+
+    ZH_FONT = "Microsoft YaHei" if sysapi.IS_WIN else "Noto Sans CJK SC"
+    JA_FONT = "Yu Gothic" if sysapi.IS_WIN else "Noto Sans CJK JP"
 
     def pump(sec, until=None):
         end = time.monotonic() + sec
@@ -56,7 +59,9 @@ def run() -> int:
     def resources():
         missing = [n for n in ("cedict.dat", "hanviet.dat", "bubble.svg", "mascot.svg", "coffee.svg",
                                "app_icon.ico", "momo_qr.jpg", "baloo_bold.ttf") if not resource(n).exists()]
+        missing += [n for n in ("LICENSE", "THIRD_PARTY_NOTICES.md") if not license_file(n).exists()]
         assert not missing, f"thiếu {missing}"
+        assert "MIT License" in license_file("LICENSE").read_text(encoding="utf-8")
         return "ok"
 
     def dictionary():
@@ -80,13 +85,13 @@ def run() -> int:
 
     def ocr_test():
         from .ui.common import qimage_to_np
-        r1 = ocr.recognize(qimage_to_np(render("细胞膜是包围细胞质的一层薄膜。", "Microsoft YaHei")))
+        r1 = ocr.recognize(qimage_to_np(render("细胞膜是包围细胞质的一层薄膜。", ZH_FONT)))
         assert "细胞膜" in r1.text and r1.lang == "ZH", r1.text
-        r2 = ocr.recognize(qimage_to_np(render("先生、今日はどこへ行きますか？", "Yu Gothic")))
+        r2 = ocr.recognize(qimage_to_np(render("先生、今日はどこへ行きますか？", JA_FONT)))
         assert "今日" in r2.text and r2.lang == "JA", r2.text
         return [r1.text, r2.text]
 
-    def windows_flags():
+    def _overlay_windows():
         from .ui.bubble import Bubble
         from .ui.live import LiveSession
         from .ui.panel import ResultPanel
@@ -101,6 +106,11 @@ def run() -> int:
         s.box.resize(400, 120)
         s.box.show()
         pump(1.0)
+        return b, p, s
+
+    def windows_flags():
+        from . import winapi
+        b, p, s = _overlay_windows()
         info = {}
         for name, w, need_noact in (("bubble", b, True), ("panel", p, False), ("livebox", s.box, True),
                                     ("liveframe", s.frame, True)):
@@ -118,16 +128,111 @@ def run() -> int:
         pump(0.3)
         assert winapi.exstyle(p) & winapi.WS_EX_TOPMOST, "ghim lại không có tác dụng"
         b.hide(); p.hide(); s.stop()
+        pump(0.5)
         return info
+
+    def _x11_state(w, tries=20):
+        from . import linuxapi
+        last = None
+        for _ in range(tries):
+            try:
+                return linuxapi.window_state(int(w.winId()))
+            except Exception as e:
+                last = e
+                pump(0.25)
+        raise last
+
+    def x11_flags():
+        from . import linuxapi
+        b, p, s = _overlay_windows()
+        try:
+            pump(0.8)
+            info = {}
+            for name, w, need_noact in (("bubble", b, True), ("panel", p, False), ("livebox", s.box, True),
+                                        ("liveframe", s.frame, True)):
+                st = _x11_state(w)
+                info[name] = st
+                assert "_NET_WM_STATE_ABOVE" in st["state"], f"{name} không nằm trên cùng: {st}"
+                if need_noact:
+                    assert not st["accepts_focus"], f"{name} sẽ lấy mất focus của game"
+            assert linuxapi.input_shape_empty(int(s.frame.winId())), "khung viền phải cho chuột xuyên qua"
+            p.toggle_pin()
+            assert pump(5, lambda: "_NET_WM_STATE_ABOVE" not in _x11_state(p)["state"]), "bỏ ghim không có tác dụng"
+            p.toggle_pin()
+            assert pump(5, lambda: "_NET_WM_STATE_ABOVE" in _x11_state(p)["state"]), "ghim lại không có tác dụng"
+            return info
+        finally:
+            b.hide(); p.hide(); s.stop()
+            pump(0.5)
+
+    def _press_combo():
+        if sysapi.IS_WIN:
+            import ctypes
+            u = ctypes.WinDLL("user32")
+            keys = [0x11, 0x12, 0x10, 0x7B]
+            for k in keys:
+                u.keybd_event(k, 0, 0, 0)
+            for k in reversed(keys):
+                u.keybd_event(k, 0, 2, 0)
+        else:
+            from Xlib import X, XK, display
+            from Xlib.ext import xtest
+            d = display.Display()
+            codes = [d.keysym_to_keycode(XK.string_to_keysym(n)) for n in ("Control_L", "Alt_L", "Shift_L", "F12")]
+            for c in codes:
+                xtest.fake_input(d, X.KeyPress, c)
+            for c in reversed(codes):
+                xtest.fake_input(d, X.KeyRelease, c)
+            d.sync()
+            d.close()
 
     def hotkeys():
         from .hotkeys import HotkeyManager
         hk = HotkeyManager()
+        got = []
+        hk.triggered.connect(got.append)
         hk.start({"t": "Ctrl+Alt+Shift+F12"})
         failed = list(hk.failed)
-        hk.stop()
-        assert not failed, "không đăng ký được phím tắt"
-        return "ok"
+        try:
+            assert not failed, f"không đăng ký được phím tắt ({hk.backend} {hk.note})"
+            pump(0.3)
+            _press_combo()
+            assert pump(5, lambda: got), "bấm phím tắt nhưng app không nhận được"
+        finally:
+            hk.stop()
+        return {"backend": hk.backend, "got": got}
+
+    def commands():
+        import subprocess
+        from .ui.app import Controller
+        ctl = Controller(app, start_hidden=True)
+        try:
+            pump(1.0)
+            exe = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, sys.argv[0]]
+            r = subprocess.run(exe + ["--capture"], timeout=60)
+            assert r.returncode == 0, f"lệnh --capture thoát với mã {r.returncode}"
+            assert pump(20, lambda: bool(ctl.selectors)), "lệnh --capture không mở khung khoanh vùng"
+            ctl.cancel_selection()
+            pump(0.5)
+            assert not ctl.selectors
+            orig = translator.translate
+            translator.translate = lambda t, l, c=None, e=None: translator.TranslateResult("[vi] " + t, "DeepL")
+            try:
+                QGuiApplication.clipboard().setText("我们走吧")
+                pump(0.3)
+                r = subprocess.run(exe + ["--clipboard"], timeout=60)
+                assert r.returncode == 0
+                assert pump(20, lambda: ctl.panels and "[vi]" in ctl.panels[0].translation.text()), \
+                    "lệnh --clipboard không mở cửa sổ dịch"
+            finally:
+                translator.translate = orig
+            ctl.close_panels()
+            return "ok"
+        finally:
+            ctl.hotkeys.stop()
+            ctl.bubble.hide()
+            ctl.settings.hide()
+            ctl.server.close()
 
     def capture():
         from .ui.common import grab_screen
@@ -157,7 +262,7 @@ def run() -> int:
         from .ui.common import grab_rect
         lbl = QLabel("你好，我们今天去学校吧。")
         lbl.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-        f = QFont("Microsoft YaHei")
+        f = QFont(ZH_FONT)
         f.setPixelSize(36)
         lbl.setFont(f)
         lbl.setStyleSheet("background:#fafaf5;color:#141414;padding:16px;")
@@ -191,9 +296,14 @@ def run() -> int:
     check("resources", resources)
     check("dictionary", dictionary)
     check("ocr", ocr_test)
-    if winapi.IS_WIN:
+    results["session"] = sysapi.session_type()
+    if sysapi.IS_WIN:
         check("windows_flags", windows_flags)
         check("hotkeys", hotkeys)
+    elif sysapi.session_type() == "x11":
+        check("x11_flags", x11_flags)
+        check("hotkeys", hotkeys)
+    check("commands", commands)
     check("capture", capture)
     check("live", live_e2e)
     if want_offline:

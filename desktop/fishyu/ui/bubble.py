@@ -27,6 +27,7 @@ def to_relative(pos: QPoint, avail: QRect):
 
 
 class Bubble(OverlayWindow):
+    mask_shape = "ellipse"
     clicked = Signal()
     menu_requested = Signal(QPoint)
 

@@ -69,6 +69,20 @@ def test_controller_and_settings(app, tmp_path):
     pytest.ctl = ctl
 
 
+def test_license_dialog(app):
+    from PySide6.QtWidgets import QTextBrowser
+    s = pytest.ctl.settings
+    md = s.license_markdown()
+    assert "MIT License" in md and "thanhhfishyu" in md
+    assert "CC-CEDICT" in md and "PySide6" in md
+    d = s.show_licenses(modal=False)
+    pump(app, 0.3)
+    text = d.findChild(QTextBrowser).toPlainText()
+    assert "Permission is hereby granted" in text and "RapidOCR" in text
+    assert "|---" not in text
+    d.close()
+
+
 def test_panel_translate(app):
     ctl = pytest.ctl
     p = ctl.open_panel("细胞膜是包围细胞质的一层薄膜。")
@@ -133,7 +147,7 @@ def test_live_session(app, monkeypatch):
     s.toggle_engine()
     assert config.get().live_engine == "OFFLINE"
     s.toggle_engine()
-    ctl.start_capture  # attribute exists
+    assert callable(ctl.start_capture)
     s.set_hidden(True)
     assert not s.box.isVisible()
     s.set_hidden(False)

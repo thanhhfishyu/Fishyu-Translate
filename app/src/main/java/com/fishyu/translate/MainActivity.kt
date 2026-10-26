@@ -272,8 +272,31 @@ class MainActivity : AppCompatActivity() {
             "Từ Android 14, khi máy hỏi quyền ghi màn hình hãy chọn \"Toàn bộ màn hình\". Mỗi lần bật bong bóng máy sẽ hỏi lại.",
         ).forEachIndexed { i, s -> howCard.addView(step(i + 1, s)) }
 
-        col.addView(label("Từ điển CC-CEDICT (MDBG, CC BY-SA 4.0). Âm Hán Việt từ Unicode Unihan, chỉ để tham khảo. OCR và dịch offline: Google ML Kit.",
+        col.addView(label("Mã nguồn mở theo giấy phép MIT. Từ điển CC-CEDICT (MDBG, CC BY-SA 4.0). Âm Hán Việt từ Unicode Unihan, chỉ để tham khảo. OCR và dịch offline: Google ML Kit.",
             12f, p.muted).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(20), dp(8), 0) })
+        col.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10), 0, 0)
+            addView(chip("Giấy phép mã nguồn mở", p) { showLicenses() })
+        }, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun showLicenses() {
+        val text = label("", 13f, p.fg).apply {
+            text = Licenses.full(this@MainActivity)
+            setLineSpacing(0f, 1.15f)
+            setTextIsSelectable(true)
+            autoLinkMask = android.text.util.Linkify.WEB_URLS
+            linksClickable = true
+            setLinkTextColor(p.accent)
+            android.text.util.Linkify.addLinks(this, android.text.util.Linkify.WEB_URLS)
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+        }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Giấy phép mã nguồn mở")
+            .setView(ScrollView(this).apply { addView(text) })
+            .setPositiveButton("Đóng", null)
+            .show()
     }
 
     private fun step(n: Int, s: String): View {

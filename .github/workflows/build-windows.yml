@@ -4,8 +4,10 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'windows/**'
+      - 'desktop/**'
       - 'app/src/main/assets/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/build-windows.yml'
   workflow_dispatch:
 
@@ -62,7 +64,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: windows
+        working-directory: desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -70,7 +72,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: windows/requirements.txt
+          cache-dependency-path: desktop/requirements.txt
 
       - name: Install
         run: |
@@ -113,8 +115,8 @@ jobs:
         with:
           name: FishyuTranslate-for-Windows
           path: |
-            windows/out/*
-            windows/selftest.json
+            desktop/out/*
+            desktop/selftest.json
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -125,4 +127,4 @@ jobs:
             Bản cho máy tính Windows 10/11 (64-bit).
             - FishyuTranslate-for-Windows-Setup: bộ cài, chạy file này để cài.
             - FishyuTranslate-for-Windows-Portable: bản không cần cài, giải nén rồi chạy FishyuTranslate.exe.
-          files: windows/out/*
+          files: desktop/out/*

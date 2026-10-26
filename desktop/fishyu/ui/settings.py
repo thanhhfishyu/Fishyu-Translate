@@ -4,11 +4,11 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QFileDialog, QHBoxLayout, QKeySequenceEdit,
                                QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QRadioButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+                               QTextBrowser, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, VERSION, config, crashlog, translator, winapi
+from .. import APP_NAME, OS_NAME, VERSION, config, crashlog, sysapi, translator
 from ..offline import OFFLINE
-from ..paths import resource
+from ..paths import license_file, resource
 from . import theme
 from .tasks import run_async
 
@@ -126,25 +126,28 @@ class SettingsWindow(QMainWindow):
         cb.toggled.connect(self._toggle_bubble)
         c.add(cb)
         self.hotkey_edits = {}
+        clip_label = "Dịch chữ đang bôi đen / đã copy" if sysapi.IS_LINUX else "Dịch chữ đã copy"
         for key, label in (("hotkey_capture", "Khoanh vùng để dịch"), ("hotkey_live", "Dịch trực tiếp (game)"),
-                           ("hotkey_clipboard", "Dịch chữ đã copy")):
+                           ("hotkey_clipboard", clip_label)):
             ed = QKeySequenceEdit(QKeySequence(getattr(st, key)))
             ed.setMaximumSequenceLength(1)
             ed.setFixedWidth(170)
             ed.editingFinished.connect(lambda k=key, e=ed: self._set_hotkey(k, e))
             self.hotkey_edits[key] = ed
             lbl = QLabel(label)
-            lbl.setMinimumWidth(190)
+            lbl.setMinimumWidth(240 if sysapi.IS_LINUX else 190)
             c.add(_row(lbl, ed))
         self.hotkey_warn = _muted("")
         self.hotkey_warn.setStyleSheet(f"color:{theme.ERROR.name()};font-size:13px;")
         self.hotkey_warn.hide()
         c.add(self.hotkey_warn)
+        if sysapi.IS_LINUX:
+            self._linux_commands(c)
         dc = QCheckBox("Bấm Ctrl+C hai lần liên tiếp để dịch chữ đang bôi đen")
         dc.setChecked(st.double_copy)
         dc.toggled.connect(lambda v: (setattr(config.get(), "double_copy", v), config.save()))
         c.add(dc)
-        sw = QCheckBox("Khởi động cùng Windows (chạy ẩn ở khay hệ thống)")
+        sw = QCheckBox(f"Khởi động cùng {'Windows' if sysapi.IS_WIN else 'máy'} (chạy ẩn ở khay hệ thống)")
         sw.setChecked(st.start_with_windows)
         sw.toggled.connect(self._toggle_startup)
         c.add(sw)
@@ -247,7 +250,9 @@ class SettingsWindow(QMainWindow):
         steps = [
             f"Bấm {hk} (hoặc chuột trái vào bong bóng cá mập), kéo chuột khoanh vùng chữ. Bấm một lần vào đoạn chữ để dịch cả đoạn, hoặc chọn \"Cả màn hình\".",
             "Cửa sổ dịch mặc định được ghim luôn trên cùng: chuyển sang game hay app đọc truyện vẫn thấy. Bấm \"Đã ghim\" để bỏ ghim. Kéo thanh trên cùng để di chuyển, kéo góc dưới phải để đổi kích thước.",
-            "Bôi đen chữ ở trang web hay app đọc truyện rồi bấm Ctrl+C hai lần, hoặc bấm phím tắt dịch chữ đã copy.",
+            ("Bôi đen chữ ở trang web hay app đọc truyện rồi bấm phím tắt dịch chữ đang bôi đen (không cần Ctrl+C), hoặc bấm Ctrl+C hai lần."
+             if sysapi.IS_LINUX else
+             "Bôi đen chữ ở trang web hay app đọc truyện rồi bấm Ctrl+C hai lần, hoặc bấm phím tắt dịch chữ đã copy."),
             "Trong cửa sổ dịch, bôi đen một từ ở phần Bản gốc rồi bấm \"Tra từ\" để xem nghĩa theo ngữ cảnh, pinyin và âm Hán Việt.",
             "Game: bấm phím tắt dịch trực tiếp, khoanh khung thoại. Khung dịch tự cập nhật, có nút đổi DeepL/Offline, cỡ chữ, dừng.",
             "Chuột phải vào bong bóng hoặc biểu tượng ở khay hệ thống để mở menu. Đóng cửa sổ này thì app vẫn chạy ở khay hệ thống.",
@@ -268,10 +273,19 @@ class SettingsWindow(QMainWindow):
             h.addWidget(t, 1)
             c.add(w)
 
-        foot = _muted(f"{APP_NAME} {VERSION}. Từ điển CC-CEDICT (MDBG, CC BY-SA 4.0). Âm Hán Việt từ Unicode Unihan. "
-                      "Nhận dạng chữ: RapidOCR (PaddleOCR). Dịch offline: Opus-MT (Helsinki-NLP).", 12)
+        foot = _muted(f"{APP_NAME} {VERSION}. Mã nguồn mở theo giấy phép MIT. Từ điển CC-CEDICT (MDBG, CC BY-SA 4.0). "
+                      "Âm Hán Việt từ Unicode Unihan. Nhận dạng chữ: RapidOCR (PaddleOCR). Dịch offline: Opus-MT (Helsinki-NLP).", 12)
         foot.setAlignment(Qt.AlignCenter)
         self.col.addWidget(foot)
+        lic = theme.Chip("Giấy phép mã nguồn mở")
+        lic.clicked.connect(self.show_licenses)
+        lic_row = QWidget()
+        lh = QHBoxLayout(lic_row)
+        lh.setContentsMargins(0, 4, 0, 0)
+        lh.addStretch(1)
+        lh.addWidget(lic)
+        lh.addStretch(1)
+        self.col.addWidget(lic_row)
         self.update_hotkey_warning([])
 
     def _build_error(self):
@@ -342,6 +356,36 @@ class SettingsWindow(QMainWindow):
         v.addWidget(_row(sv, cl))
         d.exec()
 
+    def license_markdown(self):
+        def read(name):
+            try:
+                return license_file(name).read_text(encoding="utf-8").strip()
+            except OSError:
+                return ""
+        return f"# {APP_NAME}\n\n{read('LICENSE')}\n\n{read('THIRD_PARTY_NOTICES.md')}\n"
+
+    def show_licenses(self, modal=True):
+        d = QDialog(self)
+        d.setObjectName("licenses")
+        d.setWindowTitle("Giấy phép mã nguồn mở")
+        d.setStyleSheet(f"QDialog{{background:{theme.PAGE.name()};}}" + theme.STYLE)
+        d.resize(680, 600)
+        v = QVBoxLayout(d)
+        box = QTextBrowser()
+        box.setOpenExternalLinks(True)
+        box.setMarkdown(self.license_markdown())
+        box.setStyleSheet(f"QTextBrowser{{background:{theme.BG.name()};color:{theme.FG.name()};"
+                          f"border:2px solid {theme.INK.name()};border-radius:12px;padding:8px;}}")
+        v.addWidget(box, 1)
+        cl = theme.Chip("Đóng", filled=True)
+        cl.clicked.connect(d.accept)
+        v.addWidget(_row(cl))
+        if modal:
+            d.exec()
+        else:
+            d.show()
+        return d
+
     def _build_hero(self):
         hero = theme.DoodleFrame(theme.ACCENT_SOFT, 24, 4)
         v = QVBoxLayout(hero)
@@ -355,7 +399,7 @@ class SettingsWindow(QMainWindow):
         t.setFont(theme.head_font(30))
         t.setAlignment(Qt.AlignCenter)
         v.addWidget(t)
-        s = QLabel("for Windows")
+        s = QLabel(f"for {OS_NAME}")
         s.setFont(theme.head_font(16, QFont.DemiBold))
         s.setAlignment(Qt.AlignCenter)
         s.setStyleSheet(f"color:{theme.ACCENT.name()};")
@@ -389,7 +433,7 @@ class SettingsWindow(QMainWindow):
     def _toggle_startup(self, v):
         config.get().start_with_windows = v
         config.save()
-        winapi.set_startup(v)
+        sysapi.set_startup(v)
 
     def _set_hotkey(self, key, edit):
         seq = edit.keySequence().toString(QKeySequence.PortableText)
@@ -397,11 +441,40 @@ class SettingsWindow(QMainWindow):
         config.save()
         self.hotkeys_changed.emit()
 
-    def update_hotkey_warning(self, failed):
+    def _linux_commands(self, card):
+        card.add(_muted("Có thể gắn các lệnh sau vào phím tắt của hệ thống (Cài đặt > Bàn phím > Phím tắt tuỳ chỉnh). "
+                        "Cách này dùng được cả trên Wayland."))
+        base = sysapi.launch_command()
+        for label, arg in (("Khoanh vùng", "--capture"), ("Dịch trực tiếp", "--live"), ("Chữ bôi đen", "--clipboard")):
+            cmd = f"{base} {arg}"
+            ed = QLineEdit(cmd)
+            ed.setReadOnly(True)
+            cp = theme.Chip("Chép")
+            cp.clicked.connect(lambda _=False, t=cmd: QGuiApplication.clipboard().setText(t))
+            lbl = QLabel(label)
+            lbl.setMinimumWidth(110)
+            w = QWidget()
+            h = QHBoxLayout(w)
+            h.setContentsMargins(0, 2, 0, 0)
+            h.addWidget(lbl)
+            h.addWidget(ed, 1)
+            h.addWidget(cp)
+            card.add(w)
+
+    def update_hotkey_warning(self, failed, backend="", note=""):
         names = {"capture": "khoanh vùng", "live": "dịch trực tiếp", "clipboard": "chữ đã copy"}
-        if failed:
+        if failed and backend in ("portal", "none"):
+            self.hotkey_warn.setText("Phiên Wayland này không cho app tự đăng ký phím tắt"
+                                     + (f" ({note})" if note else "")
+                                     + ". Hãy gắn các lệnh bên dưới vào phím tắt của hệ thống.")
+            self.hotkey_warn.show()
+        elif failed:
             self.hotkey_warn.setText("Không đăng ký được phím tắt " + ", ".join(names.get(f, f) for f in failed) +
                                      " (đang bị app khác dùng hoặc không hợp lệ). Hãy chọn tổ hợp khác.")
+            self.hotkey_warn.show()
+        elif backend == "portal":
+            self.hotkey_warn.setStyleSheet(f"color:{theme.MUTED.name()};font-size:13px;")
+            self.hotkey_warn.setText("Phím tắt đã được đăng ký qua hệ thống. Có thể đổi lại trong Cài đặt hệ thống.")
             self.hotkey_warn.show()
         else:
             self.hotkey_warn.hide()

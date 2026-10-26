@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtWidgets import QApplication, QWidget
 
-from .. import winapi
+from .. import sysapi
 
 
 class _Overlays(QObject):
@@ -23,23 +23,30 @@ class _Overlays(QObject):
         self._items.add(w)
 
     def _keep_on_top(self):
+        items = []
         for w in list(self._items):
             try:
                 if w.isVisible() and getattr(w, "pinned", True):
-                    winapi.set_topmost(w, True)
+                    items.append(w)
+            except RuntimeError:
+                pass
+        selectors = [w for w in items if getattr(w, "is_selector", False)]
+        for w in (selectors or items):
+            try:
+                sysapi.set_topmost(w, True)
             except RuntimeError:
                 pass
 
     def on_shown(self, w: QWidget, noactivate: bool, click_through: bool = False):
-        ok = winapi.exclude_from_capture(w)
-        if self.exclude_ok is None and winapi.IS_WIN:
+        ok = sysapi.exclude_from_capture(w)
+        if self.exclude_ok is None and sysapi.IS_WIN:
             self.exclude_ok = ok
         if noactivate:
-            winapi.set_noactivate(w, True)
+            sysapi.set_noactivate(w, True)
         if click_through:
-            winapi.set_click_through(w, True)
+            sysapi.set_click_through(w, True)
         if getattr(w, "pinned", True):
-            winapi.set_topmost(w, True)
+            sysapi.set_topmost(w, True)
 
     def visible_rects(self):
         out = []
@@ -55,24 +62,32 @@ class _Overlays(QObject):
         hidden = []
         if self.exclude_ok:
             return hidden
+        mode = sysapi.hide_mode()
         for w in list(self._items):
             try:
                 if w.isVisible() and not getattr(w, "is_selector", False) and not getattr(w, "no_mask", False):
-                    w.setWindowOpacity(0.0)
+                    if mode == "opacity":
+                        w.setWindowOpacity(0.0)
+                    else:
+                        w.hide()
                     hidden.append(w)
             except RuntimeError:
                 pass
         if hidden:
             QApplication.processEvents()
-            time.sleep(0.06)
+            time.sleep(0.12 if mode == "hide" else 0.06)
             QApplication.processEvents()
         return hidden
 
     @staticmethod
     def restore(hidden):
+        mode = sysapi.hide_mode()
         for w in hidden:
             try:
-                w.setWindowOpacity(1.0)
+                if mode == "opacity":
+                    w.setWindowOpacity(1.0)
+                else:
+                    w.show()
             except RuntimeError:
                 pass
 
@@ -101,6 +116,8 @@ def overlay_flags(pinned=True, noactivate=True, click_through=False):
 class OverlayWindow(QWidget):
     noactivate = True
     click_through = False
+    mask_shape = "round"
+    mask_radius = 18
 
     def __init__(self, pinned=True):
         super().__init__(None, overlay_flags(pinned, self.noactivate, self.click_through))
@@ -111,17 +128,40 @@ class OverlayWindow(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
+        self._apply_mask()
         overlays().on_shown(self, self.noactivate, self.click_through)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply_mask()
+
+    def shape_region(self):
+        from PySide6.QtGui import QPainterPath, QPolygonF, QRegion
+        if self.mask_shape == "ellipse":
+            return QRegion(self.rect(), QRegion.Ellipse)
+        path = QPainterPath()
+        path.addRoundedRect(self.rect().adjusted(0, 0, 0, 0), self.mask_radius, self.mask_radius)
+        return QRegion(path.toFillPolygon().toPolygon())
+
+    def _apply_mask(self):
+        if self.mask_shape == "ring" or sysapi.needs_shape_mask():
+            try:
+                self.setMask(self.shape_region())
+            except Exception:
+                pass
 
     def set_pinned(self, on: bool):
         self.pinned = on
-        geo = self.geometry()
-        vis = self.isVisible()
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
-        self.setGeometry(geo)
-        if vis:
-            self.show()
-        winapi.set_topmost(self, on)
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.setFlag(Qt.WindowStaysOnTopHint, on)
+        else:
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        if on:
+            sysapi.set_topmost(self, True)
+        elif sysapi.IS_WIN:
+            from .. import winapi
+            winapi.set_topmost(self, False)
 
 
 def qimage_to_np(img: QImage) -> np.ndarray:
@@ -136,26 +176,26 @@ def screen_at(pt: QPoint):
 
 
 def grab_screen(screen) -> QImage:
+    from . import capture
     hidden = overlays().hide_all_for_capture()
     try:
-        return screen.grabWindow(0).toImage()
+        return capture.backend().grab_screen(screen)
     finally:
         overlays().restore(hidden)
 
 
 def grab_rect(rect: QRect, hide_overlays=False):
+    from . import capture
     scr = screen_at(rect.center())
-    geo = scr.geometry()
-    r = rect.intersected(geo)
+    r = rect.intersected(scr.geometry())
     if r.isEmpty():
         return None, 1.0
     hidden = overlays().hide_all_for_capture() if hide_overlays else []
     try:
-        pm = scr.grabWindow(0, r.x() - geo.x(), r.y() - geo.y(), r.width(), r.height())
+        img = capture.backend().grab_rect(scr, r)
     finally:
         overlays().restore(hidden)
-    img = pm.toImage()
-    if img.isNull():
+    if img is None or img.isNull():
         return None, 1.0
     dpr = img.width() / max(1, r.width())
     return qimage_to_np(img), dpr

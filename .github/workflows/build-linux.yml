@@ -1,0 +1,168 @@
+name: Build Linux
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'desktop/**'
+      - 'app/src/main/assets/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - '.github/workflows/build-linux.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VER: 1.0.${{ github.run_number }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: desktop/requirements.txt
+
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb openbox dbus dbus-x11 libxcb-cursor0 libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-xkb1 libegl1 fonts-noto-cjk
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller==6.22.3 pytest pillow
+
+      - name: Prepare
+        run: |
+          cp ../app/src/main/assets/cedict.dat ../app/src/main/assets/hanviet.dat assets/
+          mkdir -p assets/cjk
+          cp /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc assets/cjk/
+          python make_version.py "$VER"
+
+      - name: Unit tests
+        run: QT_QPA_PLATFORM=offscreen python -m pytest -q tests
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean FishyuTranslate.spec
+
+      - name: Self-test on X11 (Xvfb + openbox)
+        run: |
+          chmod +x packaging/linux/*.sh
+          packaging/linux/x11run.sh dist/FishyuTranslate/FishyuTranslate --selftest --offline --out "$PWD/selftest.json" || true
+          cat selftest.json
+          python -c "import json,sys; sys.exit(0 if json.load(open('selftest.json'))['ok'] else 1)"
+
+      - name: Package AppImage, deb, tar.gz
+        run: |
+          curl -sSfL -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          packaging/linux/build_packages.sh "$VER" /tmp/appimagetool
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            desktop/out/*
+            desktop/packaging/linux/x11run.sh
+
+  verify-ubuntu-24:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: pkg
+      - name: Install .deb with apt
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb openbox dbus dbus-x11
+          sudo apt-get install -y -q ./pkg/out/fishyu-translate_${VER}_amd64.deb
+      - name: Self-test installed .deb
+        run: |
+          chmod +x pkg/packaging/linux/x11run.sh
+          pkg/packaging/linux/x11run.sh fishyu-translate --selftest --offline --out "$PWD/deb.json" || true
+          cat deb.json
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('deb.json'))['ok'] else 1)"
+      - name: Self-test AppImage
+        run: |
+          chmod +x pkg/out/*.AppImage
+          XDISPLAY=:98 pkg/packaging/linux/x11run.sh pkg/out/FishyuTranslate-for-Linux-x86_64-v${VER}.AppImage \
+            --appimage-extract-and-run --selftest --out "$PWD/appimage.json" || true
+          cat appimage.json
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('appimage.json'))['ok'] else 1)"
+
+  verify-debian-12:
+    needs: build
+    runs-on: ubuntu-latest
+    container: debian:12
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: pkg
+      - name: Install .deb with apt
+        run: |
+          apt-get update -q
+          apt-get install -y -q xvfb openbox dbus python3 ca-certificates
+          apt-get install -y -q ./pkg/out/fishyu-translate_${VER}_amd64.deb
+      - name: Self-test
+        run: |
+          chmod +x pkg/packaging/linux/x11run.sh
+          pkg/packaging/linux/x11run.sh fishyu-translate --selftest --out "$PWD/deb.json" || true
+          cat deb.json
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('deb.json'))['ok'] else 1)"
+
+  verify-fedora-41:
+    needs: build
+    runs-on: ubuntu-latest
+    container: fedora:41
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: pkg
+      - name: Desktop base libraries
+        run: |
+          dnf install -y -q xorg-x11-server-Xvfb openbox dbus-daemon dbus-tools python3 mesa-libEGL mesa-libGL \
+            fontconfig libxkbcommon-x11 findutils procps-ng
+      - name: Self-test AppImage
+        run: |
+          chmod +x pkg/out/*.AppImage pkg/packaging/linux/x11run.sh
+          pkg/packaging/linux/x11run.sh pkg/out/FishyuTranslate-for-Linux-x86_64-v${VER}.AppImage \
+            --appimage-extract-and-run --selftest --out "$PWD/fedora.json" || true
+          cat fedora.json
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('fedora.json'))['ok'] else 1)"
+
+  release:
+    needs: [build, verify-ubuntu-24, verify-debian-12, verify-fedora-41]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: pkg
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: linux-v${{ env.VER }}
+          name: Fishyu Translate for Linux v${{ env.VER }}
+          body: |
+            Bản cho Linux 64-bit (Ubuntu 22.04+, Debian 12+, Fedora 36+ và các bản tương tự).
+            - FishyuTranslate-for-Linux-x86_64-...AppImage: chạy được trên hầu hết các bản Linux, không cần cài.
+            - fishyu-translate_..._amd64.deb: bộ cài cho Ubuntu, Debian, Linux Mint, Pop!_OS, Zorin...
+            - ...tar.gz: bản giải nén chạy ngay.
+            Đã được kiểm tra tự động trên Ubuntu 22.04, Ubuntu 24.04, Debian 12 và Fedora 41 trước khi phát hành.
+          files: pkg/out/*

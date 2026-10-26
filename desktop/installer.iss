@@ -16,6 +16,7 @@ PrivilegesRequired=lowest
 OutputDir=out
 OutputBaseFilename=FishyuTranslate-for-Windows-Setup-v{#AppVersion}
 SetupIconFile=assets\app_icon.ico
+LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\FishyuTranslate.exe
 Compression=lzma2/max
 SolidCompression=yes

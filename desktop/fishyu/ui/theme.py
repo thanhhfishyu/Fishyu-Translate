@@ -20,8 +20,25 @@ HEAD_FAMILY = "Segoe UI"
 BODY_FAMILY = "Segoe UI"
 
 
+def _ensure_cjk_font():
+    import sys
+    if not sys.platform.startswith("linux"):
+        return
+    if QFontDatabase.families(QFontDatabase.SimplifiedChinese) and QFontDatabase.families(QFontDatabase.Japanese):
+        return
+    for name in ("cjk/NotoSansCJK-Regular.ttc", "cjk/NotoSansCJK-Regular.otf"):
+        p = resource(name)
+        if p.exists():
+            QFontDatabase.addApplicationFont(str(p))
+            return
+
+
 def load_fonts():
-    global HEAD_FAMILY
+    global HEAD_FAMILY, BODY_FAMILY
+    import sys
+    if not sys.platform.startswith("win"):
+        BODY_FAMILY = ""
+    _ensure_cjk_font()
     for f in ("baloo_bold.ttf", "baloo_medium.ttf"):
         fid = QFontDatabase.addApplicationFont(str(resource(f)))
         if fid >= 0 and f == "baloo_bold.ttf":
@@ -35,14 +52,14 @@ def apply_app_font(app):
 
 
 def head_font(px: int, weight=QFont.Bold) -> QFont:
-    f = QFont(HEAD_FAMILY)
+    f = QFont(HEAD_FAMILY) if HEAD_FAMILY else QFont()
     f.setPixelSize(px)
     f.setWeight(weight)
     return f
 
 
 def body_font(px: int, weight=QFont.Normal) -> QFont:
-    f = QFont(BODY_FAMILY)
+    f = QFont(BODY_FAMILY) if BODY_FAMILY else QFont()
     f.setPixelSize(px)
     f.setWeight(weight)
     return f
