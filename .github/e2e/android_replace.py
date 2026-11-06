@@ -51,19 +51,42 @@ def shot(name):
     return Image.open(path).convert("RGB")
 
 
+def _raw_dump(name):
+    out = sh("uiautomator dump /sdcard/ui.xml", timeout=60)
+    if "dumped" not in out:
+        return None
+    xml = sh("cat /sdcard/ui.xml")
+    with open(os.path.join(OUT, name + ".xml"), "w") as fh:
+        fh.write(xml)
+    try:
+        return ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+
+
+def dismiss_dialogs(root):
+    if root is None:
+        return False
+    texts = [n.get("text") or "" for n in root.iter("node")]
+    if not any("isn't responding" in t or "keeps stopping" in t or "không phản hồi" in t for t in texts):
+        return False
+    for n in root.iter("node"):
+        if (n.get("text") or "") in ("Wait", "Close app", "Đợi", "Close"):
+            tap_node(n)
+            time.sleep(2)
+            return True
+    sh("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
+    time.sleep(2)
+    return True
+
+
 def dump(name="ui"):
-    for _ in range(6):
-        out = sh("uiautomator dump /sdcard/ui.xml", timeout=60)
-        if "dumped" in out:
-            xml = sh("cat /sdcard/ui.xml")
-            with open(os.path.join(OUT, name + ".xml"), "w") as fh:
-                fh.write(xml)
-            try:
-                return ET.fromstring(xml)
-            except ET.ParseError:
-                pass
+    for _ in range(8):
+        root = _raw_dump(name)
+        if root is not None and not dismiss_dialogs(root):
+            return root
         time.sleep(1.5)
-    return None
+    return root
 
 
 def bounds(node):
