@@ -269,3 +269,13 @@ def test_replace_grouping_keeps_far_apart_text_separate():
     lines = [Line("Microsoft Edge", 0, 330, 120, 352), Line("你好，我们今天去学校吧。", 200, 330, 700, 372)]
     assert len(group_lines(lines, 1.2)) == 2
     assert len(group_lines(lines, 3.0)) == 1
+
+
+def test_render_widens_narrow_box(app):
+    img = np.full((400, 600, 3), 255, dtype=np.uint8)
+    line = (500, 100, 540, 140)
+    _ink(img, line, (0, 0, 0))
+    p = Piece(line, [line], "目", "Mục tiêu")
+    _, rects = render(img, [p], 3.0)
+    x0, y0, x1, y1 = rects[0]
+    assert x1 - x0 > 60 and x1 <= 600

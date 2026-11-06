@@ -411,23 +411,41 @@ def _draw_piece(p, px, w, h, pc, scale, family, QRect, Qt, QColor, QFont, QFontM
     if ax1 - ax0 - pad * 2 < min_w:
         grow = (min_w - (ax1 - ax0 - pad * 2) + 1) // 2
         ax0, ax1 = max(0, ax0 - grow), min(w, ax1 + grow)
+    text = pc.text.strip()
+    words = text.split()
+
+    def word_w(size):
+        font.setPixelSize(max(1, int(size)))
+        fm = QFontMetrics(font)
+        return max((fm.horizontalAdvance(x) for x in words), default=0)
+
+    max_fs = line_h * 0.84
+    min_fs = min(max(11 * scale, line_h * 0.4), max_fs)
+    need_w = word_w(min_fs) + 2
+    if ax1 - ax0 - pad * 2 < need_w:
+        grow = (need_w - (ax1 - ax0 - pad * 2) + 1) // 2
+        ax0, ax1 = ax0 - grow, ax1 + grow
+        if ax0 < 0:
+            ax0, ax1 = 0, ax1 - ax0
+        if ax1 > w:
+            ax0, ax1 = max(0, ax0 - (ax1 - w)), w
     inner_w = max(4, ax1 - ax0 - pad * 2)
     inner_h = max(4, ay1 - ay0 - pad * 2)
-    text = pc.text.strip()
 
     def measure(size):
         font.setPixelSize(max(1, int(size)))
         return QFontMetrics(font).boundingRect(QRect(0, 0, inner_w, 100000), flags, text).height()
 
-    max_fs = line_h * 0.84
-    min_fs = min(max(11 * scale, line_h * 0.4), max_fs)
-    if measure(max_fs) <= inner_h:
+    def ok(size):
+        return word_w(size) <= inner_w and measure(size) <= inner_h
+
+    if ok(max_fs):
         fs = max_fs
-    elif measure(min_fs) <= inner_h:
+    elif ok(min_fs):
         lo, hi = min_fs, max_fs
         for _ in range(9):
             mid = (lo + hi) / 2
-            if measure(mid) <= inner_h:
+            if ok(mid):
                 lo = mid
             else:
                 hi = mid

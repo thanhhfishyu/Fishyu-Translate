@@ -214,9 +214,24 @@ object ReplaceRenderer {
             area.inset(-grow, 0)
             area.intersect(0, 0, w, h)
         }
+        val text = p.text.trim()
+        val words = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        fun wordW(fs: Float): Float {
+            tp.textSize = fs
+            return words.maxOfOrNull { tp.measureText(it) } ?: 0f
+        }
+        val maxFs = lineH * 0.84f
+        val minFs = min(max(density * 9f, lineH * 0.4f), maxFs)
+        val needW = kotlin.math.ceil(wordW(minFs)).toInt() + 2
+        if (area.width() - pad * 2 < needW) {
+            val grow = (needW - (area.width() - pad * 2) + 1) / 2
+            area.inset(-grow, 0)
+            if (area.left < 0) area.offset(-area.left, 0)
+            if (area.right > w) area.offset(w - area.right, 0)
+            area.intersect(0, 0, w, h)
+        }
         val innerW = max(4, area.width() - pad * 2)
         val innerH = max(4, area.height() - pad * 2)
-        val text = p.text.trim()
         fun layout(fs: Float): StaticLayout {
             tp.textSize = fs
             return StaticLayout.Builder.obtain(text, 0, text.length, tp, innerW)
@@ -225,23 +240,19 @@ object ReplaceRenderer {
                 .setLineSpacing(0f, 1.0f)
                 .build()
         }
-        val maxFs = lineH * 0.84f
-        val minFs = min(max(density * 9f, lineH * 0.4f), maxFs)
+        fun ok(fs: Float) = wordW(fs) <= innerW && layout(fs).height <= innerH
         var lo = minFs
         var hi = maxFs
-        var best = layout(minFs)
-        var fits = best.height <= innerH
+        var fits = ok(minFs)
         if (fits) {
-            val top = layout(maxFs)
-            if (top.height <= innerH) { best = top; lo = maxFs }
+            if (ok(maxFs)) lo = maxFs
             else repeat(9) {
                 val mid = (lo + hi) / 2
-                val l = layout(mid)
-                if (l.height <= innerH) { best = l; lo = mid } else hi = mid
+                if (ok(mid)) lo = mid else hi = mid
             }
         }
         val fs = if (fits) lo else minFs
-        best = layout(fs)
+        var best = layout(fs)
         if (!fits) {
             val need = best.height + pad * 2
             area.bottom = area.top + need

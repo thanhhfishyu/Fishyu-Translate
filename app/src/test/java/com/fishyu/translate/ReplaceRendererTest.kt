@@ -122,4 +122,17 @@ class ReplaceRendererTest {
         assertTrue(r.height() > line.height() + 20)
         save(composite(b, out.bitmap, 1f), "grow.png")
     }
+
+    @Test
+    fun narrowBoxWidensInsteadOfBreakingWords() {
+        val b = Bitmap.createBitmap(600, 400, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
+        val line = Rect(500, 100, 540, 140)
+        ink(Canvas(b), line, Color.BLACK)
+        val p = Piece(Rect(line), listOf(line), "目").apply { text = "Mục tiêu" }
+        val out = ReplaceRenderer.render(b, listOf(p), 3f)
+        val r = out.painted.single()
+        assertTrue(r.width() > line.width() + 20)
+        assertTrue(r.right <= 600)
+        save(composite(b, out.bitmap, 1f), "narrow.png")
+    }
 }
