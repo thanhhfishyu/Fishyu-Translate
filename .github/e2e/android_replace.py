@@ -215,9 +215,13 @@ def main():
         sh(f"am force-stop {pkg}")
         TARGET = pkg
         open_target()
-        if "permission" in resumed().lower():
-            sh("input keyevent KEYCODE_BACK")
-        regions = text_regions(dump("target"))
+        for _ in range(5):
+            if "permission" in resumed().lower():
+                sh("input keyevent KEYCODE_BACK")
+            regions = text_regions(dump("target"))
+            if len(regions) >= 3:
+                break
+            time.sleep(4)
         if len(regions) >= 3:
             break
     before = shot("01_target_zh")
