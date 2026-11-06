@@ -405,7 +405,7 @@ class BubbleService : Service() {
         if (replace != null) return
         stopLive()
         val s = ReplaceSession(this, wm, scope, cap,
-            onBusy = { b -> bubble?.alpha = if (b) 0.5f else 0.95f },
+            onBusy = {},
             onMessage = { toast(it) })
         try {
             s.start()

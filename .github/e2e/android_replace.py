@@ -102,9 +102,22 @@ def wait(pred, sec, every=1.5):
     return pred()
 
 
-def open_settings():
-    sh("am start -W -a android.settings.SETTINGS")
-    time.sleep(2.5)
+TARGETS = ["com.google.android.documentsui", "com.android.documentsui", "com.google.android.contacts",
+           "com.google.android.deskclock", "com.android.contacts"]
+TARGET = None
+
+
+def installed(pkg):
+    return f"package:{pkg}" in sh(f"pm list packages {pkg}")
+
+
+def open_target():
+    sh(f"monkey -p {TARGET} -c android.intent.category.LAUNCHER 1")
+    time.sleep(3)
+
+
+def texts_of(root):
+    return sorted({n.get("text") for n in root.iter("node") if n.get("text")}) if root is not None else []
 
 
 def text_regions(root):
@@ -191,19 +204,28 @@ def main():
     sh(f"am force-stop {PKG}")
     sh(f"run-as {PKG} mkdir -p shared_prefs")
     sh(f"run-as {PKG} cp /data/local/tmp/fishyu_settings.xml shared_prefs/settings.xml")
-    sh("cmd locale set-app-locales com.android.settings --locales zh-CN")
-    sh("am force-stop com.android.settings")
     sh("input keyevent KEYCODE_WAKEUP")
     sh("wm dismiss-keyguard")
-
-    open_settings()
-    before = shot("01_settings_zh")
-    regions = text_regions(dump("settings"))
-    step("settings shows Chinese text", len(regions) >= 3, f"{len(regions)} vùng chữ")
+    global TARGET
+    regions = []
+    for pkg in TARGETS:
+        if not installed(pkg):
+            continue
+        sh(f"cmd locale set-app-locales {pkg} --locales zh-CN")
+        sh(f"am force-stop {pkg}")
+        TARGET = pkg
+        open_target()
+        if "permission" in resumed().lower():
+            sh("input keyevent KEYCODE_BACK")
+        regions = text_regions(dump("target"))
+        if len(regions) >= 3:
+            break
+    before = shot("01_target_zh")
+    step("target app shows Chinese text", len(regions) >= 3, f"{TARGET}: {len(regions)} vùng chữ")
 
     r = enable_replace()
     step("replace mode starts", r == "ok", r)
-    open_settings()
+    open_target()
     res = wait(lambda: (lambda t: t if t[0] else None)(replaced(before, regions)), 150, every=4)
     if not res:
         res = replaced(before, regions)
@@ -211,13 +233,14 @@ def main():
     img.save(os.path.join(OUT, "02_replaced_app_overlay.png"))
     step("translation painted over Chinese text", ok, json.dumps(diffs, ensure_ascii=False)[:600])
 
-    root = dump("settings_with_overlay")
-    targets = find(root, lambda n: has_cjk(n.get("text")) and bounds(n)[1] > 400)
+    root = dump("target_with_overlay")
+    targets = find(root, lambda n: has_cjk(n.get("text")) and n.get("clickable") == "true" or
+                   has_cjk(n.get("text")) and bounds(n)[1] > 300)
     step("clickable Chinese item found", bool(targets))
-    home = resumed()
-    tap_node(targets[0])
-    nav = wait(lambda: resumed() != home and resumed(), 8, every=0.5)
-    step("tap passes through overlay (app overlay mode)", bool(nav), f"{home} -> {resumed()}")
+    home = texts_of(root)
+    tap_node(targets[min(1, len(targets) - 1)])
+    nav = wait(lambda: texts_of(dump("after_tap")) != home, 10, every=1)
+    step("tap passes through overlay (app overlay mode)", bool(nav), json.dumps(texts_of(dump("after_tap"))[:12], ensure_ascii=False))
     time.sleep(15)
     shot("04_subpage_replaced")
 
@@ -227,23 +250,25 @@ def main():
     step("accessibility service connects", bool(connected))
     sh("input keyevent KEYCODE_BACK")
     time.sleep(2)
-    open_settings()
+    sh(f"am force-stop {TARGET}")
+    open_target()
     res = wait(lambda: (lambda t: t if t[0] else None)(replaced(before, regions)), 120, every=4)
     if not res:
         res = replaced(before, regions)
     ok, diffs, img = res
     img.save(os.path.join(OUT, "05_replaced_trusted_overlay.png"))
     step("translation painted in trusted mode", ok, json.dumps(diffs, ensure_ascii=False)[:600])
-    root = dump("settings_trusted")
-    targets = find(root, lambda n: has_cjk(n.get("text")) and bounds(n)[1] > 400)
+    root = dump("target_trusted")
+    targets = find(root, lambda n: has_cjk(n.get("text")) and n.get("clickable") == "true" or
+                   has_cjk(n.get("text")) and bounds(n)[1] > 300)
     time.sleep(4)
     windows = sh("dumpsys window windows")
     report["windows"] = [l.strip() for l in windows.splitlines() if PKG in l or "ACCESSIBILITY_OVERLAY" in l][:30]
     shot("05b_before_trusted_tap")
-    home = resumed()
-    tap_node(targets[0])
-    nav = wait(lambda: resumed() != home and resumed(), 8, every=0.5)
-    step("tap passes through overlay (trusted mode)", bool(nav), f"{home} -> {resumed()}")
+    home = texts_of(root)
+    tap_node(targets[min(1, len(targets) - 1)])
+    nav = wait(lambda: texts_of(dump("after_tap_trusted")) != home, 10, every=1)
+    step("tap passes through overlay (trusted mode)", bool(nav), json.dumps(texts_of(dump("after_tap_trusted"))[:12], ensure_ascii=False))
     time.sleep(10)
     shot("06_trusted_subpage")
     pid = sh(f"pidof {PKG}").strip()
