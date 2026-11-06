@@ -28,6 +28,8 @@ _session = requests.Session()
 _cache = OrderedDict()
 _cache_lock = threading.Lock()
 _known_host = None
+_pieces = OrderedDict()
+deepl_sent_chars = 0
 
 
 def _hosts(key):
@@ -72,13 +74,20 @@ def apply_glossary_xml(text, pairs):
 
 
 def deepl(text, lang, context=None):
+    ctx = context if context and context.strip() != text else None
+    return TranslateResult(deepl_many([text], lang, ctx)[0], "DeepL")
+
+
+def deepl_many(texts, lang, context=None):
+    global deepl_sent_chars
     st = config.get()
     key = st.deepl_key.strip()
-    marked = apply_glossary_xml(text, st.glossary_pairs())
-    ctx = "\n".join(x for x in [st.domain_hint.strip(), (context or "").strip() if context and context.strip() != text else ""] if x)
+    pairs = st.glossary_pairs()
+    marked = [apply_glossary_xml(t, pairs) for t in texts]
+    ctx = "\n".join(x for x in [st.domain_hint.strip(), (context or "").strip()[:4000]] if x)
 
     def body(with_model):
-        b = {"text": [marked], "target_lang": "VI", "tag_handling": "xml", "ignore_tags": ["x"],
+        b = {"text": marked, "target_lang": "VI", "tag_handling": "xml", "ignore_tags": ["x"],
              "preserve_formatting": True}
         if lang in ("ZH", "JA"):
             b["source_lang"] = lang
@@ -96,10 +105,13 @@ def deepl(text, lang, context=None):
         raise TranslateError(f"không kết nối được ({type(e).__name__})")
     if code == 200:
         try:
-            out = json.loads(resp)["translations"][0]["text"]
+            outs = [t["text"] for t in json.loads(resp)["translations"]]
         except Exception:
             raise TranslateError("phản hồi không hợp lệ")
-        return TranslateResult(_unesc(out.replace("<x>", "").replace("</x>", "")), "DeepL")
+        if len(outs) != len(texts):
+            raise TranslateError("DeepL trả về thiếu kết quả")
+        deepl_sent_chars += sum(len(t) for t in texts)
+        return [_unesc(o.replace("<x>", "").replace("</x>", "")) for o in outs]
     if code == 403:
         raise TranslateError("API key không hợp lệ")
     if code == 456:
@@ -174,6 +186,55 @@ def translate(text, lang, context=None, engine=None):
         while len(_cache) > 300:
             _cache.popitem(last=False)
     return res
+
+
+def translate_many(texts, lang, context=None, engine=None):
+    st = config.get()
+    engine = engine or st.engine
+    clean = [t.strip() for t in texts]
+    tag = (engine, lang, hash(st.glossary), hash(st.domain_hint))
+    out = [None] * len(clean)
+    missing = []
+    with _cache_lock:
+        for i, t in enumerate(clean):
+            if not t:
+                out[i] = TranslateResult("", "")
+            elif (tag, t) in _pieces:
+                _pieces.move_to_end((tag, t))
+                out[i] = _pieces[(tag, t)]
+            else:
+                missing.append(i)
+    if not missing:
+        return out
+    unique = list(dict.fromkeys(clean[i] for i in missing))
+    done = {}
+    if engine == "DEEPL" and st.deepl_key.strip():
+        try:
+            for k in range(0, len(unique), 40):
+                chunk = unique[k:k + 40]
+                for t, r in zip(chunk, deepl_many(chunk, lang, context)):
+                    done[t] = TranslateResult(r, "DeepL")
+        except TranslateError as e:
+            if not st.fallback_offline:
+                raise
+            for t in unique:
+                if t not in done:
+                    r = offline(t, lang)
+                    done[t] = TranslateResult(r.text, r.engine, f"DeepL lỗi: {e} -> đã dịch offline")
+    else:
+        for t in unique:
+            r = offline(t, lang)
+            done[t] = TranslateResult(r.text, r.engine, "Chưa nhập DeepL API key -> đang dịch offline") \
+                if engine == "DEEPL" else r
+    with _cache_lock:
+        for t, r in done.items():
+            if not r.note:
+                _pieces[(tag, t)] = r
+        while len(_pieces) > 3000:
+            _pieces.popitem(last=False)
+    for i in missing:
+        out[i] = done[clean[i]]
+    return out
 
 
 _SENT = re.compile(r"(?<=[。！？!?；;\n])")

@@ -2,7 +2,7 @@ name: Build Linux
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'try/**' ]
     paths:
       - 'desktop/**'
       - 'app/src/main/assets/**'
@@ -148,6 +148,7 @@ jobs:
 
   release:
     needs: [build, verify-ubuntu-24, verify-debian-12, verify-fedora-41]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

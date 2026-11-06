@@ -2,7 +2,7 @@ name: Build Windows
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'try/**' ]
     paths:
       - 'desktop/**'
       - 'app/src/main/assets/**'
@@ -119,6 +119,7 @@ jobs:
             desktop/selftest.json
 
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: win-v1.0.${{ github.run_number }}

@@ -11,6 +11,7 @@ from . import theme
 from .bubble import Bubble
 from .common import grab_screen, qimage_to_np
 from .live import LiveSession
+from .replace import ReplaceSession
 from .panel import ResultPanel
 from .selector import RegionSelector
 from .settings import SettingsWindow
@@ -19,7 +20,7 @@ from .tasks import run_async
 SERVER_NAME = "FishyuTranslateForWindows"
 
 
-COMMANDS = ("show", "capture", "live", "clipboard", "quit")
+COMMANDS = ("show", "capture", "live", "clipboard", "replace", "quit")
 
 
 def already_running(command: str = "show") -> bool:
@@ -68,6 +69,7 @@ class Controller(QObject):
         self.panels = []
         self.selectors = []
         self.live = None
+        self.replace = None
         self.prev_fg = 0
         self._last_copy = (0.0, "")
         self._hidden_notified = False
@@ -159,6 +161,8 @@ class Controller(QObject):
                 self.start_capture(True)
         elif cmd == "clipboard":
             self.translate_clipboard()
+        elif cmd == "replace":
+            self.toggle_replace(from_hotkey=True)
         elif cmd == "quit":
             self.quit()
         else:
@@ -184,8 +188,13 @@ class Controller(QObject):
         st = config.get()
         live_item = ("Dừng dịch trực tiếp", self.stop_live) if self.live else \
             (f"Dịch trực tiếp (game)    {st.hotkey_live}", lambda: self.start_capture(True))
+        if self.replace:
+            replace_items = [("Tắt thay chữ", self.stop_replace), ("Dịch lại màn hình này", self.replace.refresh)]
+        else:
+            replace_items = [(f"Thay chữ trên màn hình    {st.hotkey_replace}", self.start_replace)]
         return [
             (f"Khoanh vùng để dịch    {st.hotkey_capture}", lambda: self.start_capture(False)),
+            *replace_items,
             live_item,
             (f"Dịch chữ đã copy    {st.hotkey_clipboard}", self.translate_clipboard),
             None,
@@ -227,9 +236,10 @@ class Controller(QObject):
 
     def apply_hotkeys(self):
         st = config.get()
-        self.hotkeys.start({"capture": st.hotkey_capture, "live": st.hotkey_live, "clipboard": st.hotkey_clipboard},
+        self.hotkeys.start({"capture": st.hotkey_capture, "live": st.hotkey_live, "clipboard": st.hotkey_clipboard,
+                            "replace": st.hotkey_replace},
                            {"capture": "Khoanh vùng để dịch", "live": "Dịch trực tiếp (game)",
-                            "clipboard": "Dịch chữ đang bôi đen / đã copy"})
+                            "clipboard": "Dịch chữ đang bôi đen / đã copy", "replace": "Thay chữ trên màn hình"})
         self.settings.update_hotkey_warning(self.hotkeys.failed, self.hotkeys.backend, self.hotkeys.note)
 
     def _on_hotkey(self, name):
@@ -239,6 +249,55 @@ class Controller(QObject):
             self.start_capture(True)
         elif name == "clipboard":
             self.translate_clipboard()
+        elif name == "replace":
+            self.toggle_replace(from_hotkey=True)
+
+    def toggle_replace(self, from_hotkey=False):
+        if self.replace:
+            if from_hotkey and self.replace.manual:
+                self.replace.refresh()
+            else:
+                self.stop_replace()
+        else:
+            self.start_replace()
+
+    def start_replace(self):
+        if self.replace:
+            return
+        self.stop_live()
+        pos = self.bubble.geometry().center() if self.bubble.isVisible() else QCursor.pos()
+        scr = QGuiApplication.screenAt(pos) or QGuiApplication.primaryScreen()
+        s = ReplaceSession(scr, on_stop=self._replace_stopped)
+        s.status.connect(self._replace_status)
+        self.replace = s
+        s.start()
+        self._sync_replace_pause()
+        self.settings.update_replace_state(True)
+
+    def _replace_stopped(self, s):
+        if self.replace is s:
+            self.replace = None
+            self.settings.update_replace_state(False)
+
+    def stop_replace(self):
+        if self.replace:
+            s = self.replace
+            self.replace = None
+            s.stop()
+        self.settings.update_replace_state(False)
+
+    def _replace_status(self, msg):
+        if self.tray:
+            self.tray.showMessage("Fishyu Translate", msg, QSystemTrayIcon.Information, 3000)
+
+    def _sync_replace_pause(self):
+        r = self.replace
+        if not r:
+            return
+        busy_ui = bool(self.selectors) or self._capturing
+        if not r.clean_capture:
+            busy_ui = busy_ui or bool(self.panels)
+        r.set_paused(busy_ui)
 
     def _on_clipboard(self):
         if not config.get().double_copy:
@@ -268,24 +327,32 @@ class Controller(QObject):
             except RuntimeError:
                 pass
         self.panels.clear()
+        self._sync_replace_pause()
 
     def open_panel(self, text=None, lang=None, context=None, anchor: QRect = None) -> ResultPanel:
         if text is not None:
             self._op += 1
         self.close_panels()
-        p = ResultPanel(on_close=lambda pp: self.panels.remove(pp) if pp in self.panels else None)
+        p = ResultPanel(on_close=self._panel_closed)
         self.panels.append(p)
+        self._sync_replace_pause()
         p.place_near(anchor)
         p.show()
         if text is not None:
             p.start(text, lang, context)
         return p
 
+    def _panel_closed(self, pp):
+        if pp in self.panels:
+            self.panels.remove(pp)
+        self._sync_replace_pause()
+
     def start_capture(self, live_mode: bool):
         if self._capturing or self.selectors:
             return
         self._op += 1
         self._capturing = True
+        self._sync_replace_pause()
         try:
             self.prev_fg = sysapi.foreground()
             self.close_panels()
@@ -320,6 +387,7 @@ class Controller(QObject):
             self._end_selection()
         finally:
             self._capturing = False
+            self._sync_replace_pause()
 
     def cancel_selection(self):
         self._op += 1
@@ -335,6 +403,7 @@ class Controller(QObject):
         self.selectors = []
         if self.live:
             self.live.set_hidden(False)
+        self._sync_replace_pause()
         if restore_focus:
             QTimer.singleShot(50, lambda h=self.prev_fg: sysapi.restore_foreground(h))
 
@@ -431,6 +500,7 @@ class Controller(QObject):
     def start_live(self, region: QRect):
         self._op += 1
         self.stop_live()
+        self.stop_replace()
         self.close_panels()
         scr = QGuiApplication.screenAt(region.center()) or QGuiApplication.primaryScreen()
         region = region.intersected(scr.geometry())
@@ -457,6 +527,7 @@ class Controller(QObject):
             pass
         self.hotkeys.stop()
         self.stop_live()
+        self.stop_replace()
         if self.tray:
             self.tray.hide()
         self.app.quit()

@@ -45,6 +45,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toggleBtn: TextView
     private lateinit var permText: TextView
     private var batteryText: TextView? = null
+    private var accessText: TextView? = null
+    private var replaceBtn: TextView? = null
     private lateinit var keyField: EditText
     private lateinit var usageText: TextView
     private lateinit var domainField: EditText
@@ -194,6 +196,28 @@ class MainActivity : AppCompatActivity() {
             ), 6)
         }
 
+        val replaceCard = card("Thay chữ trên màn hình", "mới")
+        replaceCard.text("App đọc chữ Trung/Nhật trên màn hình rồi viết đè bản dịch tiếng Việt lên đúng chỗ đó, như thể chữ đã được thay. Bạn vẫn chạm, cuộn, lật trang, chơi game bình thường. Khi nội dung đổi, bản dịch tự cập nhật.")
+        replaceBtn = bigButton("Bật thay chữ", p) {
+            if (BubbleService.running) {
+                startService(Intent(this, BubbleService::class.java).setAction(BubbleService.ACTION_REPLACE))
+                it.postDelayed({ refreshStatus() }, 400)
+            } else startBubble(BubbleService.THEN_REPLACE)
+        }
+        replaceCard.addFull(replaceBtn!!, 10)
+        replaceCard.text("Bộ dịch cho chế độ này", p.fg, 14f)
+        replaceCard.radios(Engine.entries, { if (it == Engine.DEEPL) "DeepL (chuẩn hơn, tốn ký tự)" else "Offline (miễn phí, tiết kiệm)" },
+            Prefs.replaceEngine) { Prefs.replaceEngine = it }
+        replaceCard.text("Mỗi đoạn chỉ dịch một lần, quay lại trang cũ không tốn thêm ký tự DeepL.")
+        replaceCard.text("Hiển thị rõ nét", p.fg, 14f)
+        accessText = replaceCard.text("")
+        replaceCard.text("Android 12 trở lên chỉ cho lớp phủ chạm xuyên được che tối đa 80%, nên chữ gốc còn hiện mờ phía sau. Bật quyền Trợ năng \"Fishyu Translate - hiển thị rõ nét\" để che kín. Fishyu không dùng quyền này để đọc màn hình hay theo dõi thao tác.")
+        replaceCard.text("Nếu mục đó bị mờ, không bật được: bấm \"Thông tin ứng dụng\", chạm dấu ⋮ ở góc trên, chọn \"Cho phép cài đặt bị hạn chế\", rồi quay lại bật.")
+        replaceCard.addFull(hbox(
+            chip("Bật Trợ năng", p, filled = true) { openAccessibility() },
+            chip("Thông tin ứng dụng", p) { tryStart(appDetails()) },
+        ), 6)
+
         val liveCard = card("Dịch trực tiếp", "game")
         liveCard.text("Giữ bong bóng, chọn \"Dịch trực tiếp (game)\" rồi khoanh khung thoại. App tự dịch lại mỗi khi chữ trong khung đổi, bạn vẫn chạm vào game bình thường.")
         liveCard.text("Bộ dịch cho chế độ này", p.fg, 14f)
@@ -267,6 +291,7 @@ class MainActivity : AppCompatActivity() {
             "Chạm bong bóng cá mập, kéo ngón tay để khoanh vùng chữ. Chạm nhẹ vào một đoạn để dịch cả đoạn, hoặc chọn \"Cả màn hình\".",
             "Ở app cho phép chọn chữ: bôi đen rồi chọn \"Dịch (Fishyu)\" (có thể nằm trong mục ba chấm). App không có mục này thì bấm Chép, sau đó giữ bong bóng và chọn \"Dịch chữ đã copy\".",
             "Trong cửa sổ dịch, bôi đen một từ ở phần Bản gốc rồi chọn \"Tra từ\" để xem nghĩa theo ngữ cảnh, pinyin và âm Hán Việt.",
+            "Thay chữ: giữ bong bóng, chọn \"Thay chữ trên màn hình\". Bản dịch được viết đè ngay lên chữ gốc và tự đổi khi bạn sang trang. Chọn \"Dịch lại màn hình này\" nếu bản dịch chưa khớp.",
             "Chơi game: giữ bong bóng, chọn \"Dịch trực tiếp (game)\", khoanh khung thoại. Khung dịch kéo được bằng thanh trên cùng, A-/A+ để đổi cỡ chữ, nút DeepL/Offline để đổi bộ dịch.",
             "Thêm nút Fishyu Translate vào thanh cài đặt nhanh để bật tắt cho tiện.",
             "Từ Android 14, khi máy hỏi quyền ghi màn hình hãy chọn \"Toàn bộ màn hình\". Mỗi lần bật bong bóng máy sẽ hỏi lại.",
@@ -465,7 +490,16 @@ class MainActivity : AppCompatActivity() {
         tryStart(*listOfNotNull(direct, byAction, appDetails()).toTypedArray())
     }
 
+    private fun openAccessibility() {
+        val detail = if (Build.VERSION.SDK_INT >= 31) Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, OverlayAccess.component(this).flattenToString()) else null
+        tryStart(*listOfNotNull(detail, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), appDetails()).toTypedArray())
+    }
+
     private fun refreshStatus() {
+        accessText?.text = if (OverlayAccess.instance != null || OverlayAccess.enabledInSettings(this))
+            "Đã bật: bản dịch che kín chữ gốc" else "Chưa bật: chữ gốc còn hiện mờ phía sau bản dịch"
+        replaceBtn?.text = if (BubbleService.running && BubbleService.replacing) "Tắt thay chữ" else "Bật thay chữ"
         batteryText?.text = if (getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
             "Đã cấp: không giới hạn pin" else "Chưa cấp: không giới hạn pin"
         val overlay = Settings.canDrawOverlays(this)
@@ -478,7 +512,7 @@ class MainActivity : AppCompatActivity() {
         toggleBtn.text = if (BubbleService.running) "Tắt bong bóng" else "Bật bong bóng"
     }
 
-    private fun startBubble() {
+    private fun startBubble(then: Int = 0) {
         save()
         if (!Settings.canDrawOverlays(this)) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -486,18 +520,21 @@ class MainActivity : AppCompatActivity() {
         }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            pendingThen = then
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
             return
         }
-        startActivity(Intent(this, ProjectionActivity::class.java))
+        startActivity(Intent(this, ProjectionActivity::class.java).putExtra(BubbleService.EXTRA_THEN, then))
     }
+
+    private var pendingThen = 0
 
     @Deprecated("Deprecated in Java")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         @Suppress("DEPRECATION")
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         refreshStatus()
-        if (requestCode == 7) startActivity(Intent(this, ProjectionActivity::class.java))
+        if (requestCode == 7) startActivity(Intent(this, ProjectionActivity::class.java).putExtra(BubbleService.EXTRA_THEN, pendingThen))
     }
 }
 

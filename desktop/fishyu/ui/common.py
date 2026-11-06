@@ -110,6 +110,8 @@ def overlay_flags(pinned=True, noactivate=True, click_through=False):
         f |= Qt.WindowDoesNotAcceptFocus
     if click_through:
         f |= Qt.WindowTransparentForInput
+        if sysapi.IS_LINUX:
+            f |= Qt.X11BypassWindowManagerHint
     return f
 
 

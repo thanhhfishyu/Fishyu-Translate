@@ -152,6 +152,9 @@ def run() -> int:
                                         ("liveframe", s.frame, True)):
                 st = _x11_state(w)
                 info[name] = st
+                if name == "liveframe":
+                    assert st["bypass_wm"], f"{name} phải nằm ngoài trình quản lý cửa sổ để chuột đi xuyên qua: {st}"
+                    continue
                 assert "_NET_WM_STATE_ABOVE" in st["state"], f"{name} không nằm trên cùng: {st}"
                 if need_noact:
                     assert not st["accepts_focus"], f"{name} sẽ lấy mất focus của game"
@@ -290,6 +293,112 @@ def run() -> int:
         lbl.close()
         return calls
 
+    def _click(x, y):
+        if sysapi.IS_WIN:
+            import ctypes
+            u = ctypes.WinDLL("user32")
+            u.SetCursorPos(int(x), int(y))
+            time.sleep(0.05)
+            u.mouse_event(0x0002, 0, 0, 0, 0)
+            time.sleep(0.05)
+            u.mouse_event(0x0004, 0, 0, 0, 0)
+        else:
+            from Xlib import X, display
+            from Xlib.ext import xtest
+            d = display.Display()
+            xtest.fake_input(d, X.MotionNotify, x=int(x), y=int(y))
+            d.sync()
+            time.sleep(0.05)
+            xtest.fake_input(d, X.ButtonPress, 1)
+            d.sync()
+            time.sleep(0.05)
+            xtest.fake_input(d, X.ButtonRelease, 1)
+            d.sync()
+            d.close()
+
+    def replace_e2e():
+        from .ui import replace as rep_mod
+        calls = []
+
+        def fake_many(texts, lang, context=None, engine=None):
+            calls.append(list(texts))
+            return [translator.TranslateResult(("Xin chào, hôm nay chúng ta đi học nhé." if "学校" in t else
+                                                "Đợi chút, mình chưa chuẩn bị xong!"), "DeepL") for t in texts]
+
+        orig = rep_mod.translator.translate_many
+        rep_mod.translator.translate_many = fake_many
+        try:
+            return _replace_body(rep_mod, calls)
+        finally:
+            rep_mod.translator.translate_many = orig
+
+    def _replace_body(rep_mod, calls):
+        from .textutil import han_count
+        from .ui.common import grab_rect
+
+        class Target(QLabel):
+            clicks = 0
+
+            def mousePressEvent(self, e):
+                Target.clicks += 1
+
+        t = Target("你好，我们今天去学校吧。")
+        t.setWindowFlags(Qt.FramelessWindowHint)
+        f = QFont(ZH_FONT)
+        f.setPixelSize(40)
+        t.setFont(f)
+        t.setStyleSheet("background:#fafaf5;color:#141414;padding:18px;")
+        t.setGeometry(160, 320, 760, 110)
+        t.show()
+        t.raise_()
+        pump(1.5)
+        geo = QRect(t.mapToGlobal(t.rect().topLeft()), t.size())
+        img, _ = grab_rect(geo)
+        if img is None or float(img.std()) < 2:
+            t.close()
+            return "bỏ qua: máy build không có màn hình để chụp"
+        s = rep_mod.ReplaceSession(QGuiApplication.primaryScreen())
+        s.start()
+        try:
+            def painted_over_target():
+                if not s.visible or s.last is None:
+                    return False
+                return any(s.overlay_rect_global(r).intersects(geo) for r in s.last[1])
+
+            assert pump(120, painted_over_target), f"không thấy bản dịch đè lên chữ (state={s.gate.state}, calls={calls})"
+            info = {"clean_capture": s.clean_capture, "rects": [list(r) for r in s.last[1]]}
+            pump(1.0)
+            if not s.clean_capture:
+                shot, _ = grab_rect(geo)
+                if _arg("--shots"):
+                    QGuiApplication.primaryScreen().grabWindow(0).save(_arg("--shots") + "/replace_screen.png")
+                left = ocr.recognize(shot).text
+                info["ocr_after"] = left
+                assert han_count(left) <= 2, f"chữ gốc vẫn còn trên màn hình: {left}"
+            else:
+                from . import winapi
+                assert winapi.exstyle(s.overlay) & winapi.WS_EX_TRANSPARENT, "lớp dịch phải cho chuột xuyên qua"
+            n = len(calls)
+            before = Target.clicks
+            c = geo.center()
+            _click(c.x(), c.y())
+            assert pump(6, lambda: Target.clicks > before), "bấm vào chữ đã dịch nhưng app bên dưới không nhận được"
+            pump(3.5)
+            assert s.visible, "lớp dịch phải còn sau khi bấm"
+            assert len(calls) == n, f"màn hình không đổi mà vẫn dịch lại: {calls}"
+            t.setText("等一下，我还没准备好！")
+            pump(0.5)
+            _click(c.x(), c.y())
+            assert pump(120, lambda: s.visible and any("准备" in x for batch in calls for x in batch)), \
+                f"không cập nhật khi chữ đổi: {calls}"
+            info["clicks"] = Target.clicks
+            info["calls"] = calls
+            return info
+        finally:
+            s.stop()
+            t.close()
+            pump(0.5)
+
     def offline():
         from .offline import OFFLINE
         r = translator.translate("我们走吧，时间不多了。", "ZH", engine="OFFLINE")
@@ -312,6 +421,8 @@ def run() -> int:
     check("commands", commands)
     check("capture", capture)
     check("live", live_e2e)
+    if sysapi.IS_WIN or sysapi.session_type() == "x11":
+        check("replace", replace_e2e)
     if want_offline:
         check("offline", offline)
     results["ok"] = ok

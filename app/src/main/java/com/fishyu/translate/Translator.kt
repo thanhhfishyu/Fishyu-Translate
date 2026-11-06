@@ -26,6 +26,9 @@ object Translator {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
     private val cache = LruCache<String, TranslateResult>(300)
+    private val pieceCache = LruCache<String, TranslateResult>(2000)
+    @Volatile var deeplSentChars = 0L
+        private set
     private val offlineClients = HashMap<String, com.google.mlkit.nl.translate.Translator>()
     private val offlineReady = HashSet<String>()
     private val JSON = "application/json; charset=utf-8".toMediaType()
@@ -117,17 +120,61 @@ object Translator {
         return s to used
     }
 
+    suspend fun translateMany(
+        texts: List<String>,
+        lang: SourceLang,
+        context: String? = null,
+        engine: Engine = Prefs.engine,
+    ): List<TranslateResult> {
+        val clean = texts.map { it.trim() }
+        val tag = "$engine|$lang|${Prefs.glossaryText.hashCode()}|${Prefs.domainHint.hashCode()}|"
+        val out = arrayOfNulls<TranslateResult>(clean.size)
+        val missing = ArrayList<Int>()
+        clean.forEachIndexed { i, t ->
+            if (t.isEmpty()) out[i] = TranslateResult("", "")
+            else pieceCache.get(tag + t)?.let { out[i] = it } ?: missing.add(i)
+        }
+        if (missing.isEmpty()) return out.map { it!! }
+        val unique = missing.map { clean[it] }.distinct()
+        val done = HashMap<String, TranslateResult>()
+        if (engine == Engine.DEEPL && Prefs.deeplKey.isNotEmpty()) {
+            try {
+                for (chunk in unique.chunked(40)) {
+                    val res = deeplMany(chunk, lang, context)
+                    chunk.forEachIndexed { j, t -> done[t] = TranslateResult(res[j], "DeepL") }
+                }
+            } catch (e: TranslateException) {
+                if (!Prefs.fallbackOffline) throw e
+                for (t in unique) if (t !in done) {
+                    val r = offline(t, lang)
+                    done[t] = TranslateResult(r.text, r.engine, "DeepL lỗi: ${e.message} -> đã dịch offline")
+                }
+            }
+        } else {
+            for (t in unique) {
+                val r = offline(t, lang)
+                done[t] = if (engine == Engine.DEEPL) TranslateResult(r.text, r.engine, "Chưa nhập DeepL API key -> đang dịch offline") else r
+            }
+        }
+        for ((t, r) in done) if (r.note == null) pieceCache.put(tag + t, r)
+        for (i in missing) out[i] = done[clean[i]]
+        return out.map { it!! }
+    }
+
     private suspend fun deepl(text: String, lang: SourceLang, context: String?): TranslateResult =
+        TranslateResult(deeplMany(listOf(text), lang, context.takeIf { it?.trim() != text })[0], "DeepL")
+
+    private suspend fun deeplMany(texts: List<String>, lang: SourceLang, context: String?): List<String> =
         withContext(Dispatchers.IO) {
             val k = Prefs.deeplKey
-            val (marked, _) = applyGlossaryXml(text)
+            val marked = texts.map { applyGlossaryXml(it).first }
             val ctx = buildString {
                 if (Prefs.domainHint.isNotBlank()) append(Prefs.domainHint.trim()).append('\n')
-                if (!context.isNullOrBlank() && context.trim() != text) append(context.trim())
+                if (!context.isNullOrBlank()) append(context.trim().take(4000))
             }.trim()
 
             fun body(withModel: Boolean) = JSONObject().apply {
-                put("text", JSONArray().put(marked))
+                put("text", JSONArray().apply { marked.forEach { put(it) } })
                 put("target_lang", "VI")
                 lang.deepl?.let { put("source_lang", it) }
                 if (ctx.isNotEmpty()) put("context", ctx)
@@ -152,9 +199,11 @@ object Translator {
             when (code) {
                 200 -> {
                     val arr = JSONObject(resp).getJSONArray("translations")
-                    val out = arr.getJSONObject(0).getString("text")
-                        .replace("<x>", "").replace("</x>", "")
-                    TranslateResult(unescapeXml(out), "DeepL")
+                    if (arr.length() != texts.size) throw TranslateException("DeepL trả về thiếu kết quả")
+                    deeplSentChars += texts.sumOf { it.length }
+                    List(arr.length()) { i ->
+                        unescapeXml(arr.getJSONObject(i).getString("text").replace("<x>", "").replace("</x>", ""))
+                    }
                 }
                 403 -> throw TranslateException("API key không hợp lệ")
                 456 -> throw TranslateException("đã hết số ký tự của gói")

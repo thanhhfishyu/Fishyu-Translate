@@ -103,7 +103,8 @@ def window_state(wid: int):
         names = [d.get_atom_name(a) for a in prop.value]
     hints = w.get_wm_hints()
     accepts_focus = bool(hints.input) if hints and (hints.flags & 1) else True
-    return {"state": names, "accepts_focus": accepts_focus}
+    bypass = bool(w.get_attributes().override_redirect)
+    return {"state": names, "accepts_focus": accepts_focus, "bypass_wm": bypass}
 
 
 def input_shape_empty(wid: int) -> bool:

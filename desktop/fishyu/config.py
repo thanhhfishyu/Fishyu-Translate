@@ -21,6 +21,7 @@ class Settings:
     deepl_key: str = ""
     engine: str = "DEEPL"
     live_engine: str = "DEEPL"
+    replace_engine: str = "DEEPL"
     fallback_offline: bool = True
     source_lang: str = "AUTO"
     domain_hint: str = ""
@@ -36,6 +37,7 @@ class Settings:
     hotkey_capture: str = "Ctrl+Alt+Q"
     hotkey_live: str = "Ctrl+Alt+W"
     hotkey_clipboard: str = "Ctrl+Alt+E"
+    hotkey_replace: str = "Ctrl+Alt+R"
     double_copy: bool = True
     start_with_windows: bool = False
     first_run_done: bool = False
@@ -79,6 +81,8 @@ def get() -> Settings:
                 s.engine = "DEEPL"
             if s.live_engine not in ENGINES:
                 s.live_engine = "DEEPL"
+            if s.replace_engine not in ENGINES:
+                s.replace_engine = "DEEPL"
             if s.source_lang not in SOURCE_LANGS:
                 s.source_lang = "AUTO"
             s.live_font = max(10, min(32, s.live_font))

@@ -127,8 +127,8 @@ class SettingsWindow(QMainWindow):
         c.add(cb)
         self.hotkey_edits = {}
         clip_label = "Dịch chữ đang bôi đen / đã copy" if sysapi.IS_LINUX else "Dịch chữ đã copy"
-        for key, label in (("hotkey_capture", "Khoanh vùng để dịch"), ("hotkey_live", "Dịch trực tiếp (game)"),
-                           ("hotkey_clipboard", clip_label)):
+        for key, label in (("hotkey_capture", "Khoanh vùng để dịch"), ("hotkey_replace", "Thay chữ trên màn hình"),
+                           ("hotkey_live", "Dịch trực tiếp (game)"), ("hotkey_clipboard", clip_label)):
             ed = QKeySequenceEdit(QKeySequence(getattr(st, key)))
             ed.setMaximumSequenceLength(1)
             ed.setFixedWidth(170)
@@ -151,6 +151,23 @@ class SettingsWindow(QMainWindow):
         sw.setChecked(st.start_with_windows)
         sw.toggled.connect(self._toggle_startup)
         c.add(sw)
+
+        c = Card("Thay chữ trên màn hình", "mới")
+        self.col.addWidget(c)
+        c.add(_muted("App đọc chữ Trung/Nhật trên màn hình rồi viết đè bản dịch tiếng Việt lên đúng chỗ đó, như thể chữ đã "
+                     "được thay. Lớp dịch cho chuột và bàn phím đi xuyên qua, nên vẫn đọc, cuộn, bấm, chơi game bình thường. "
+                     "Khi nội dung đổi (sang trang, cuộn, câu thoại mới), bản dịch tự cập nhật."))
+        if sysapi.is_wayland():
+            c.add(_muted("Trên Wayland, mỗi lần bấm phím tắt (hoặc lệnh --replace) app sẽ chụp và dịch lại màn hình hiện tại."))
+        elif sysapi.IS_LINUX:
+            c.add(_muted("Trên Linux, lớp dịch tắt rất nhanh rồi hiện lại mỗi khi bạn bấm chuột hay phím, để kiểm tra nội dung có đổi không."))
+        self.replace_btn = theme.Chip("Bật thay chữ", filled=True, small=False)
+        self.replace_btn.clicked.connect(lambda: self.controller.toggle_replace())
+        c.add(_row(self.replace_btn))
+        c.add(QLabel("Bộ dịch cho chế độ này"))
+        self._radios(c, {"DEEPL": "DeepL (chuẩn hơn, tốn ký tự)", "OFFLINE": "Offline (miễn phí, tiết kiệm)"},
+                     st.replace_engine, lambda v: setattr(config.get(), "replace_engine", v))
+        c.add(_muted("Mỗi đoạn chỉ dịch một lần, quay lại trang cũ không tốn thêm ký tự DeepL."))
 
         c = Card("Dịch trực tiếp", "game")
         self.col.addWidget(c)
@@ -254,6 +271,7 @@ class SettingsWindow(QMainWindow):
              if sysapi.IS_LINUX else
              "Bôi đen chữ ở trang web hay app đọc truyện rồi bấm Ctrl+C hai lần, hoặc bấm phím tắt dịch chữ đã copy."),
             "Trong cửa sổ dịch, bôi đen một từ ở phần Bản gốc rồi bấm \"Tra từ\" để xem nghĩa theo ngữ cảnh, pinyin và âm Hán Việt.",
+            f"Thay chữ: bấm {st.hotkey_replace} hoặc chọn \"Thay chữ trên màn hình\" trong menu. Bản dịch được viết đè ngay lên chữ gốc; chọn \"Dịch lại màn hình này\" nếu bản dịch chưa khớp.",
             "Game: bấm phím tắt dịch trực tiếp, khoanh khung thoại. Khung dịch tự cập nhật, có nút đổi DeepL/Offline, cỡ chữ, dừng.",
             "Chuột phải vào bong bóng hoặc biểu tượng ở khay hệ thống để mở menu. Đóng cửa sổ này thì app vẫn chạy ở khay hệ thống.",
         ]
@@ -445,7 +463,8 @@ class SettingsWindow(QMainWindow):
         card.add(_muted("Có thể gắn các lệnh sau vào phím tắt của hệ thống (Cài đặt > Bàn phím > Phím tắt tuỳ chỉnh). "
                         "Cách này dùng được cả trên Wayland."))
         base = sysapi.launch_command()
-        for label, arg in (("Khoanh vùng", "--capture"), ("Dịch trực tiếp", "--live"), ("Chữ bôi đen", "--clipboard")):
+        for label, arg in (("Khoanh vùng", "--capture"), ("Thay chữ", "--replace"), ("Dịch trực tiếp", "--live"),
+                           ("Chữ bôi đen", "--clipboard")):
             cmd = f"{base} {arg}"
             ed = QLineEdit(cmd)
             ed.setReadOnly(True)
@@ -461,8 +480,15 @@ class SettingsWindow(QMainWindow):
             h.addWidget(cp)
             card.add(w)
 
+    def update_replace_state(self, on: bool):
+        try:
+            self.replace_btn.setText("Tắt thay chữ" if on else "Bật thay chữ")
+            self.replace_btn.updateGeometry()
+        except (AttributeError, RuntimeError):
+            pass
+
     def update_hotkey_warning(self, failed, backend="", note=""):
-        names = {"capture": "khoanh vùng", "live": "dịch trực tiếp", "clipboard": "chữ đã copy"}
+        names = {"capture": "khoanh vùng", "live": "dịch trực tiếp", "clipboard": "chữ đã copy", "replace": "thay chữ"}
         if failed and backend in ("portal", "none"):
             self.hotkey_warn.setText("Phiên Wayland này không cho app tự đăng ký phím tắt"
                                      + (f" ({note})" if note else "")

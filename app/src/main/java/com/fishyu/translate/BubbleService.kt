@@ -43,6 +43,10 @@ class BubbleService : Service() {
         const val EXTRA_THEN = "then"
         const val THEN_CAPTURE = 1
         const val THEN_LIVE = 2
+        const val THEN_REPLACE = 3
+        const val ACTION_REPLACE = "replace"
+        @Volatile var replacing = false
+            private set
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val EXTRA_TOKEN = "token"
@@ -72,6 +76,7 @@ class BubbleService : Service() {
     private var card: ResultCard? = null
     private var capturing = false
     private var live: LiveSession? = null
+    private var replace: ReplaceSession? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -83,6 +88,11 @@ class BubbleService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_REPLACE -> {
+                if (!running) { stopSelf(); return START_NOT_STICKY }
+                if (replace != null) stopReplace() else startReplace()
+                return START_NOT_STICKY
+            }
             ACTION_SHOW -> {
                 if (!running) { stopSelf(); return START_NOT_STICKY }
                 Prefs.resetBubble()
@@ -133,6 +143,7 @@ class BubbleService : Service() {
                 when (intent.getIntExtra(EXTRA_THEN, 0)) {
                     THEN_CAPTURE -> bubble?.postDelayed({ startCapture() }, 700)
                     THEN_LIVE -> bubble?.postDelayed({ startCapture(liveMode = true) }, 700)
+                    THEN_REPLACE -> bubble?.postDelayed({ startReplace() }, 700)
                 }
             }
         }
@@ -148,7 +159,11 @@ class BubbleService : Service() {
             Intent(this, BubbleService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, App.CHANNEL)
             .setSmallIcon(R.drawable.ic_tile)
-            .setContentTitle(if (lost) "Bong bóng dịch: cần cấp lại quyền" else "Bong bóng dịch đang bật")
+            .setContentTitle(when {
+                lost -> "Bong bóng dịch: cần cấp lại quyền"
+                replace != null -> "Đang thay chữ trên màn hình"
+                else -> "Bong bóng dịch đang bật"
+            })
             .setContentText(if (lost) "Chạm vào đây để cấp lại quyền chụp màn hình" else "Chạm bong bóng để dịch, giữ để mở menu")
             .setContentIntent(open)
             .addAction(0, "Tắt", stop)
@@ -172,6 +187,7 @@ class BubbleService : Service() {
 
     private fun onProjectionLost() {
         stopLive()
+        stopReplace()
         removeSelector()
         runCatching { capturer?.release() }
         capturer = null
@@ -195,6 +211,7 @@ class BubbleService : Service() {
 
     private fun setupProjection(code: Int, data: Intent) {
         stopLive()
+        stopReplace()
         runCatching { capturer?.release() }
         capturer = null
         runCatching { projection?.stop() }
@@ -216,6 +233,7 @@ class BubbleService : Service() {
         val before = c?.let { it.width to it.height }
         c?.onConfigChanged()
         removeSelector()
+        if (replace != null && c != null) replace?.onConfigChanged()
         if (live != null && c != null && before != (c.width to c.height)) {
             stopLive()
             toast("Màn hình đã xoay, hãy chọn lại vùng dịch trực tiếp")
@@ -226,6 +244,7 @@ class BubbleService : Service() {
         running = false
         removeView(bubble); bubble = null
         stopLive()
+        stopReplace()
         runCatching { removeMenu(); removeSelector(); removePanel() }
         runCatching { capturer?.release() }; capturer = null
         runCatching { projection?.stop() }; projection = null
@@ -342,6 +361,11 @@ class BubbleService : Service() {
             })
         }
         item("Khoanh vùng để dịch") { startCapture() }
+        if (replace == null) item("Thay chữ trên màn hình") { startReplace() }
+        else {
+            item("Tắt thay chữ") { stopReplace() }
+            item("Dịch lại màn hình này") { replace?.refresh() }
+        }
         if (live == null) item("Dịch trực tiếp (game)") { startCapture(liveMode = true) }
         else item("Dừng dịch trực tiếp") { stopLive() }
         item("Dịch chữ đã copy") { openTranslate(fromClipboard = true) }
@@ -367,10 +391,52 @@ class BubbleService : Service() {
         box.setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) { removeMenu(); true } else false
         }
-        if (runCatching { wm.addView(box, lp) }.isSuccess) menu = box
+        if (runCatching { wm.addView(box, lp) }.isSuccess) { menu = box; syncReplacePause() }
     }
 
-    private fun removeMenu() { removeView(menu); menu = null }
+    private fun removeMenu() { removeView(menu); menu = null; syncReplacePause() }
+
+    private fun syncReplacePause() {
+        replace?.setPaused(menu != null || selector != null || panel != null || capturing)
+    }
+
+    private fun startReplace() {
+        val cap = capturer ?: run { requestProjection(THEN_REPLACE); return }
+        if (replace != null) return
+        stopLive()
+        val s = ReplaceSession(this, wm, scope, cap,
+            onBusy = { b -> bubble?.alpha = if (b) 0.5f else 0.95f },
+            onMessage = { toast(it) })
+        try {
+            s.start()
+            replace = s
+            replacing = true
+        } catch (e: Throwable) {
+            CrashLog.save(this, e, "startReplace")
+            runCatching { s.stop() }
+            toast("Không bật được thay chữ: ${CrashLog.shortReason(e)}")
+            return
+        }
+        bringBubbleToFront()
+        updateNotification()
+        toast(if (s.trusted) "Đã bật thay chữ trên màn hình" else "Đã bật thay chữ. Bật \"Hiển thị rõ nét\" trong app để che kín chữ gốc")
+        syncReplacePause()
+    }
+
+    private fun stopReplace() {
+        val s = replace ?: return
+        replace = null
+        replacing = false
+        s.stop()
+        bubble?.alpha = 0.95f
+        updateNotification()
+    }
+
+    private fun bringBubbleToFront() {
+        val v = bubble ?: return
+        val lp = bubbleLp ?: return
+        runCatching { wm.removeView(v); wm.addView(v, lp) }
+    }
 
     private fun startCapture(liveMode: Boolean = false) {
         val cap = capturer ?: run {
@@ -379,6 +445,7 @@ class BubbleService : Service() {
         }
         if (capturing) return
         capturing = true
+        syncReplacePause()
         val startFrame = cap.frames
         removePanel()
         live?.setHidden(true)
@@ -391,12 +458,14 @@ class BubbleService : Service() {
             }
             capturing = false
             if (shot == null) {
+                syncReplacePause()
                 bubble?.visibility = View.VISIBLE
                 live?.setHidden(false)
                 toast("Chưa chụp được màn hình. Hãy thử lại; nếu vẫn lỗi, tắt rồi bật lại bong bóng và chọn \"Toàn bộ màn hình\"")
                 return@launch
             }
             if (liveMode) showLiveSelector(shot) else showSelector(shot)
+            syncReplacePause()
         }
     }
 
@@ -439,6 +508,7 @@ class BubbleService : Service() {
     private fun startLive(r: Rect) {
         val cap = capturer ?: return
         stopLive()
+        stopReplace()
         removePanel()
         Prefs.liveRegion = "${r.left},${r.top},${r.right},${r.bottom},${cap.width},${cap.height}"
         val s = LiveSession(this, wm, scope, cap, r,
@@ -513,6 +583,7 @@ class BubbleService : Service() {
         removeView(selector); selector = null
         live?.setHidden(false)
         if (panel == null) bubble?.visibility = View.VISIBLE
+        syncReplacePause()
     }
 
     private fun translateImage(crop: Bitmap, anchor: Rect) {
@@ -614,6 +685,7 @@ class BubbleService : Service() {
         try {
             wm.addView(frame, lp)
             panel = frame; card = c
+            syncReplacePause()
         } catch (e: Throwable) {
             CrashLog.save(this, e, "showPanel")
             toast("Không mở được cửa sổ dịch: ${CrashLog.shortReason(e)}")
@@ -622,7 +694,7 @@ class BubbleService : Service() {
         return c
     }
 
-    private fun removePanel() { removeView(panel); panel = null; card = null }
+    private fun removePanel() { removeView(panel); panel = null; card = null; syncReplacePause() }
 
     private fun openTranslate(fromClipboard: Boolean) {
         startActivity(Intent(this, TranslateActivity::class.java)

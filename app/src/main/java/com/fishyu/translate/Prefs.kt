@@ -51,6 +51,10 @@ object Prefs {
         get() = runCatching { Engine.valueOf(sp.getString("live_engine", "DEEPL")!!) }.getOrDefault(Engine.DEEPL)
         set(v) = sp.edit().putString("live_engine", v.name).apply()
 
+    var replaceEngine: Engine
+        get() = runCatching { Engine.valueOf(sp.getString("replace_engine", "DEEPL")!!) }.getOrDefault(Engine.DEEPL)
+        set(v) = sp.edit().putString("replace_engine", v.name).apply()
+
     var liveFontSp: Int
         get() = sp.getInt("live_font", 16)
         set(v) = sp.edit().putInt("live_font", v.coerceIn(11, 28)).apply()

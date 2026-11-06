@@ -3,4 +3,6 @@
     <string name="process_text_label">Dịch (Fishyu)</string>
     <string name="share_label">Dịch bằng Fishyu Translate</string>
     <string name="tile_label">Fishyu Translate</string>
+    <string name="accessibility_label">Fishyu Translate - hiển thị rõ nét</string>
+    <string name="accessibility_description">Cho phép Fishyu Translate vẽ bản dịch đè kín lên chữ gốc khi bật chế độ Thay chữ trên màn hình, mà bạn vẫn chạm xuyên qua được. Fishyu không dùng quyền này để đọc nội dung trên màn hình hay theo dõi thao tác của bạn.</string>
 </resources>

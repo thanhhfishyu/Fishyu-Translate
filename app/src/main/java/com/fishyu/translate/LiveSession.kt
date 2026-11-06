@@ -110,6 +110,7 @@ class LiveSession(
         }
         val lp = baseLp(region.width() + pad * 2, region.height() + pad * 2,
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        lp.alpha = ReplaceSession.passThroughAlpha(ctx)
         lp.x = region.left - pad
         lp.y = region.top - pad
         wm.addView(v, lp)

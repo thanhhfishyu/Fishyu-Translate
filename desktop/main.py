@@ -10,7 +10,7 @@ def _prepare_linux():
 
 
 def _command():
-    for c in ("capture", "live", "clipboard", "show", "quit"):
+    for c in ("capture", "live", "clipboard", "replace", "show", "quit"):
         if f"--{c}" in sys.argv:
             return c
     return None
@@ -40,7 +40,7 @@ def main():
     theme.apply_app_font(app)
     app.setWindowIcon(theme.app_icon())
     app.setStyleSheet(theme.STYLE)
-    ctl = Controller(app, start_hidden="--tray" in sys.argv or cmd in ("capture", "live", "clipboard"))
+    ctl = Controller(app, start_hidden="--tray" in sys.argv or cmd in ("capture", "live", "clipboard", "replace"))
     app._controller = ctl
     if cmd and cmd != "show":
         from PySide6.QtCore import QTimer

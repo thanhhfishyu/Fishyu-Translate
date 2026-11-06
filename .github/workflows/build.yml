@@ -2,13 +2,15 @@ name: Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'try/**' ]
     paths-ignore:
       - 'README.md'
       - 'docs/**'
       - 'desktop/**'
       - '.github/workflows/build-windows.yml'
       - '.github/workflows/build-linux.yml'
+      - '.github/workflows/android-e2e.yml'
+      - '.github/e2e/**'
   workflow_dispatch:
 
 permissions:
@@ -41,6 +43,7 @@ jobs:
           path: out/*.apk
 
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}

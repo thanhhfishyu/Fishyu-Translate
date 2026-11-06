@@ -125,6 +125,40 @@ class ScreenCapturer(private val ctx: Context, private val projection: MediaProj
 
     val frames: Long get() = frameCounter
 
+    fun signature(cell: Int): ScreenSig? = synchronized(lock) {
+        val img = latest ?: return null
+        val plane = img.planes[0]
+        val buf = plane.buffer
+        val rs = plane.rowStride
+        val ps = plane.pixelStride
+        val cols = img.width / cell
+        val rows = img.height / cell
+        if (cols < 1 || rows < 1) return null
+        val v = IntArray(cols * rows)
+        val step = (cell / 8).coerceAtLeast(1)
+        for (cy in 0 until rows) for (cx in 0 until cols) {
+            var sum = 0
+            var n = 0
+            var y = cy * cell
+            while (y < (cy + 1) * cell) {
+                var x = cx * cell
+                val base = y * rs
+                while (x < (cx + 1) * cell) {
+                    val o = base + x * ps
+                    val r = buf.get(o).toInt() and 0xff
+                    val g = buf.get(o + 1).toInt() and 0xff
+                    val b = buf.get(o + 2).toInt() and 0xff
+                    sum += (r * 30 + g * 59 + b * 11) / 100
+                    n++
+                    x += step
+                }
+                y += step
+            }
+            v[cy * cols + cx] = sum / n
+        }
+        ScreenSig(cols, rows, v, frameCounter)
+    }
+
     fun grabRegion(r: Rect): Bitmap? = synchronized(lock) {
         val img = latest ?: return null
         val left = r.left.coerceIn(0, img.width - 1)
