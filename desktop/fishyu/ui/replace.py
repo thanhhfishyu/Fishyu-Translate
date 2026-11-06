@@ -335,7 +335,7 @@ class ReplaceSession(QObject):
 
             run_async(work, lambda r, e: self._rendered(op, sig, r, e), "replace-render")
 
-        run_async(lambda: ocr.recognize(arr, pref), after_ocr, "replace-ocr")
+        run_async(lambda: ocr.recognize(arr, pref, row_gap=1.2), after_ocr, "replace-ocr")
 
     def _rendered(self, op, sig, r, err):
         if op != self.op or not self.alive:

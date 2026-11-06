@@ -262,3 +262,10 @@ def test_manual_session_paints_over_text(app, monkeypatch):
         assert s.overlay.isVisible()
     finally:
         s.stop()
+
+
+def test_replace_grouping_keeps_far_apart_text_separate():
+    from fishyu.ocr import Line, group_lines
+    lines = [Line("Microsoft Edge", 0, 330, 120, 352), Line("你好，我们今天去学校吧。", 200, 330, 700, 372)]
+    assert len(group_lines(lines, 1.2)) == 2
+    assert len(group_lines(lines, 3.0)) == 1

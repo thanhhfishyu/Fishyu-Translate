@@ -62,7 +62,7 @@ def warmup():
         pass
 
 
-def merge_rows(pieces):
+def merge_rows(pieces, gap=3.0):
     rows = []
     for pc in sorted(pieces, key=lambda l: (l.y0 + l.y1) / 2):
         target = None
@@ -71,7 +71,7 @@ def merge_rows(pieces):
             bot = max(p.y1 for p in row)
             ov = min(bot, pc.y1) - max(top, pc.y0)
             if ov > 0.5 * min(pc.h, bot - top):
-                gap_ok = any(min(abs(pc.x0 - p.x1), abs(p.x0 - pc.x1)) < 3 * max(pc.h, p.h) for p in row)
+                gap_ok = any(min(abs(pc.x0 - p.x1), abs(p.x0 - pc.x1)) < gap * max(pc.h, p.h) for p in row)
                 if gap_ok:
                     target = row
                     break
@@ -87,8 +87,8 @@ def merge_rows(pieces):
     return out
 
 
-def group_lines(lines):
-    lines = sorted(merge_rows(lines), key=lambda l: (l.y0, l.x0))
+def group_lines(lines, row_gap=3.0):
+    lines = sorted(merge_rows(lines, row_gap), key=lambda l: (l.y0, l.x0))
     blocks = []
     for ln in lines:
         target = None
@@ -109,7 +109,7 @@ def group_lines(lines):
     return blocks
 
 
-def recognize(img: np.ndarray, pref: str = "AUTO") -> OcrResult:
+def recognize(img: np.ndarray, pref: str = "AUTO", row_gap: float = 3.0) -> OcrResult:
     if img is None or img.size == 0:
         return OcrResult([], "ZH")
     h, w = img.shape[:2]
@@ -129,7 +129,7 @@ def recognize(img: np.ndarray, pref: str = "AUTO") -> OcrResult:
             ys = [p[1] / scale for p in box]
             if txt and txt.strip():
                 lines.append(Line(txt.strip(), min(xs), min(ys), max(xs), max(ys)))
-    blocks = group_lines(lines)
+    blocks = group_lines(lines, row_gap)
     full = " ".join(l.text for l in lines)
     return OcrResult(blocks, detect_lang(full, pref))
 
