@@ -215,12 +215,15 @@ def main():
         sh(f"am force-stop {pkg}")
         TARGET = pkg
         open_target()
-        for _ in range(5):
+        for i in range(6):
             if "permission" in resumed().lower():
                 sh("input keyevent KEYCODE_BACK")
-            regions = text_regions(dump("target"))
+            root = dump(f"target_{pkg}_{i}")
+            regions = text_regions(root)
+            print(pkg, i, resumed(), texts_of(root)[:8], flush=True)
             if len(regions) >= 3:
                 break
+            shot(f"target_{pkg}_{i}")
             time.sleep(4)
         if len(regions) >= 3:
             break
